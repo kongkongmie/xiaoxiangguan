@@ -5,13 +5,14 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
+import { inflateRawSync } from "node:zlib";
 import { translateChapter } from "../lib/engine.mjs";
-import { sourceParagraphs, validateSegments, translationBlocks, parseAlignedText } from "../lib/alignment.mjs";
+import { alignmentSchema, sourceParagraphs, validateSegments, translationBlocks, parseAlignedText } from "../lib/alignment.mjs";
 import { generate, providerSnapshot } from "../lib/providers.mjs";
 
 const storage = await mkdtemp(join(tmpdir(), "xxg-integrity-"));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let mode = "normal", requests = [], payloads = [], arrived, release, generatedCount = 0;
+let mode = "normal", requests = [], payloads = [], arrived, release, generatedCount = 0, invalidResponsesRemaining = 0, invalidShapesRemaining = 0;
 const mock = http.createServer(async (req, res) => {
   let body = ""; for await (const c of req) body += c;
   const payload = JSON.parse(body); const content = payload.messages?.[1]?.content || payload.input?.[1]?.content?.[0]?.text || "";
@@ -21,7 +22,10 @@ const mock = http.createServer(async (req, res) => {
   if (paragraphs) generatedCount++;
   if ((mode === "slow" || mode === "after-one" && generatedCount > 1) && paragraphs) { arrived?.(); await new Promise((r) => { release = r; }); }
   const segments = paragraphs ? JSON.parse(paragraphs[1]).map((p, i) => ({ sourceParagraphIds: [p.id], text: `新译文${i + 1}。` })) : [];
-  const text = mode === "refusal-json" ? '{"segments":[],"refusal":"本块无法处理"}' : mode === "refusal-plain" ? "抱歉，我无法翻译这段内容。" : mode === "invalid-json" ? '{"segments":[' : paragraphs ? JSON.stringify({ segments, refusal: null }) : content.includes("JSON") ? '{"terms":[],"characters":[],"uncertainties":[]}' : "连接成功";
+  if (invalidShapesRemaining > 0 && segments[0]) { segments[0].sourceParagraphIds = segments[0].sourceParagraphIds[0]; invalidShapesRemaining--; }
+  const invalidResponse = invalidResponsesRemaining > 0;
+  if (invalidResponse) invalidResponsesRemaining--;
+  const text = mode === "refusal-json" ? '{"segments":[],"refusal":"本块无法处理"}' : mode === "refusal-plain" ? "抱歉，我无法翻译这段内容。" : mode === "invalid-json" || invalidResponse ? '{"segments":[' : paragraphs ? JSON.stringify({ segments, refusal: null }) : content.includes("JSON") ? '{"terms":[],"characters":[],"uncertainties":[]}' : "连接成功";
   const truncated = mode === "truncated";
   if (mode === "http-blocked") { res.writeHead(400, { "content-type": "application/json" }); res.end(JSON.stringify({ error: { code: "content_policy_violation", message: "blocked fixture" } })); return; }
   res.writeHead(200, { "content-type": "application/json" });
@@ -30,7 +34,19 @@ const mock = http.createServer(async (req, res) => {
 await new Promise((r) => mock.listen(0, "127.0.0.1", r));
 const provider = { protocol: "openai-chat", baseUrl: `http://127.0.0.1:${mock.address().port}/v1`, model: "mock", noAuth: true };
 let child;
+const originalFetch = globalThis.fetch;
 try {
+  let deepseekPayload;
+  globalThis.fetch = async (url, options) => {
+    if (String(url) === "https://api.deepseek.com/chat/completions") {
+      deepseekPayload = JSON.parse(options.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"segments":[{"sourceParagraphIds":["p1"],"text":"译文"}],"refusal":null}' }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return originalFetch(url, options);
+  };
+  await generate({ provider: { protocol: "openai-chat", baseUrl: "https://api.deepseek.com", model: "deepseek-flash", noAuth: true }, messages: [{ role: "system", content: "Return JSON" }, { role: "user", content: "Translate" }], responseSchema: alignmentSchema });
+  assert.deepEqual(deepseekPayload.response_format, { type: "json_object" }, "official DeepSeek chat requests enable guaranteed JSON output");
+
   mode = "truncated";
   for (const protocol of ["openai-chat", "openai-responses"]) await assert.rejects(generate({ provider: { ...provider, protocol }, messages: [{ role: "user", content: "test" }] }), /未完整结束/);
   for (const failure of ["native-refusal", "filtered", "http-blocked"]) {
@@ -44,6 +60,15 @@ try {
     await assert.rejects(translateChapter({ provider, book: {}, chapter: { id: "refusal" }, source: "A neutral sentence.", onBlock: (block) => blocks.push(block) }), { code: failure === "invalid-json" ? "INVALID_TRANSLATION_JSON" : "MODEL_REFUSAL" });
     assert.equal(blocks.at(-1).status, "failed"); assert.ok(blocks.at(-1).partialText); assert.equal(blocks.some((block) => block.status === "completed"), false);
   }
+  mode = "normal"; requests = []; invalidResponsesRemaining = 1;
+  const recoveredJson = await translateChapter({ provider, book: {}, chapter: { id: "retry-invalid-json" }, source: "A neutral sentence." });
+  assert.equal(requests.length, 2, "a malformed model JSON response is retried automatically");
+  assert.equal(recoveredJson.segments.length, 1, "the valid retry is adopted");
+  assert.deepEqual([recoveredJson.inputTokens, recoveredJson.outputTokens], [40, 20], "retry usage includes every billed attempt");
+  requests = []; invalidShapesRemaining = 1;
+  const recoveredShape = await translateChapter({ provider, book: {}, chapter: { id: "retry-invalid-shape" }, source: "A neutral sentence." });
+  assert.equal(requests.length, 2, "a structurally invalid paragraph mapping is retried automatically");
+  assert.equal(recoveredShape.segments.length, 1, "the structurally valid retry is adopted");
   assert.equal(parseAlignedText('{"segments":[{"sourceParagraphIds":["p1"],"text":"抱歉，我无法帮助你。"}]}', ["p1"])[0].text, "抱歉，我无法帮助你。", "literary dialogue inside valid segments is not treated as a refusal");
   mode = "normal";
   const smallSource = ["A", "B", "C", "D"].map((text) => text.repeat(700)).join("\n\n");
@@ -137,7 +162,16 @@ try {
   const version = await start("version"); assert.equal((await finish(version.id)).status, "completed");
   const current = await chapter("version"); assert.match(current.translation, /新译文/); assert.equal(current.revisionHistory.length, 2); assert.ok(current.activeRevisionId);
   const exported = await api("/api/books/book/export/epub", "POST", { includeDraft: true, chapterIds: ["version"] });
-  const epub = Buffer.from(await (await fetch(base + exported.downloadUrl)).arrayBuffer()); assert.ok(epub.includes(Buffer.from("新译文"))); assert.equal(epub.includes(Buffer.from("旧精校版")), false);
+  const epub = Buffer.from(await (await fetch(base + exported.downloadUrl)).arrayBuffer());
+  const entries = [];
+  for (let offset = 0; epub.readUInt32LE(offset) === 0x04034b50;) {
+    const method = epub.readUInt16LE(offset + 8), size = epub.readUInt32LE(offset + 18);
+    const start = offset + 30 + epub.readUInt16LE(offset + 26) + epub.readUInt16LE(offset + 28);
+    entries.push(method === 8 ? inflateRawSync(epub.subarray(start, start + size)) : epub.subarray(start, start + size));
+    offset = start + size;
+  }
+  const exportedContent = Buffer.concat(entries);
+  assert.ok(exportedContent.includes(Buffer.from("新译文"))); assert.equal(exportedContent.includes(Buffer.from("旧精校版")), false);
   const secondExport = await api("/api/books/book/export/epub", "POST", { includeDraft: true, chapterIds: ["version"] }); assert.notEqual(secondExport.downloadUrl, exported.downloadUrl);
 
   mode = "slow"; let pending = new Promise((r) => { arrived = r; }); const cancel = await start("cancel"); await pending;
@@ -218,6 +252,7 @@ try {
   assert.match((await finish(sourceRetry.id)).error, /原文/); assert.equal(requests.length, 0, "source changes still invalidate checkpoints");
   console.log("F1–F4, ID alignment, merged/missing/duplicate paragraphs, resumable blocks and restart recovery, immutable exports and reader protection passed");
 } finally {
+  globalThis.fetch = originalFetch;
   release?.(); if (child) { child.kill(); await once(child, "exit"); }
   mock.closeAllConnections(); await new Promise((r) => mock.close(r));
   await rm(storage, { recursive: true, force: true });
