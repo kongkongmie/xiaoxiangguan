@@ -116,7 +116,7 @@ try {
   await writeFile(join(storage, "secrets/provider.json"), JSON.stringify(provider));
   await writeFile(join(storage, "library/book/old.md"), "旧精校版");
   const chapters = ["version", "cancel", "reader", "progress", "restart", "sized", "queued-size", "failure", "blocked", "changed-source"].map((id) => ({ id, title: id, source: ["progress", "restart", "failure", "blocked", "changed-source"].includes(id) ? source : ["sized", "queued-size"].includes(id) ? smallSource : "Source paragraph.", status: "review", ...(id === "version" ? { polishedPath: "old.md" } : {}) }));
-  await writeFile(join(storage, "data/library.json"), JSON.stringify({ books: [{ id: "book", title: "fixture", chapters, tasks: [], glossary: [], characters: [], uncertainties: [] }, { id: "other-book", title: "other", chapters: [], tasks: [] }], exports: [] }));
+  await writeFile(join(storage, "data/library.json"), JSON.stringify({ books: [{ id: "book", title: "経済ヤクザ (角川文庫)", chapters, tasks: [], glossary: [], characters: [], uncertainties: [] }, { id: "other-book", title: "other", chapters: [], tasks: [] }], exports: [] }));
   const boot = async () => {
   child = spawn(process.execPath, ["server.mjs"], { cwd: new URL("../", import.meta.url), env: { ...process.env, PORT: "0", TRANSLATION_LIBRARY_DATA_DIR: storage }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let stderr = ""; child.stderr.on("data", (d) => { stderr += d; });
@@ -162,7 +162,11 @@ try {
   const version = await start("version"); assert.equal((await finish(version.id)).status, "completed");
   const current = await chapter("version"); assert.match(current.translation, /新译文/); assert.equal(current.revisionHistory.length, 2); assert.ok(current.activeRevisionId);
   const exported = await api("/api/books/book/export/epub", "POST", { includeDraft: true, chapterIds: ["version"] });
-  const epub = Buffer.from(await (await fetch(base + exported.downloadUrl)).arrayBuffer());
+  const downloadName = decodeURIComponent(exported.downloadUrl.split("/").at(-1));
+  assert.match(downloadName, /^[\x21-\x7e]+\.epub$/, "download filename stays ASCII for Apple Books import");
+  const download = await fetch(base + exported.downloadUrl);
+  assert.ok(download.headers.get("content-disposition")?.includes(downloadName), "the browser receives the ASCII download filename");
+  const epub = Buffer.from(await download.arrayBuffer());
   const entries = [];
   for (let offset = 0; epub.readUInt32LE(offset) === 0x04034b50;) {
     const method = epub.readUInt16LE(offset + 8), size = epub.readUInt32LE(offset + 18);
@@ -171,6 +175,7 @@ try {
     offset = start + size;
   }
   const exportedContent = Buffer.concat(entries);
+  assert.ok(exportedContent.includes(Buffer.from("経済ヤクザ (角川文庫)")), "EPUB metadata retains the original book title");
   assert.ok(exportedContent.includes(Buffer.from("新译文"))); assert.equal(exportedContent.includes(Buffer.from("旧精校版")), false);
   const secondExport = await api("/api/books/book/export/epub", "POST", { includeDraft: true, chapterIds: ["version"] }); assert.notEqual(secondExport.downloadUrl, exported.downloadUrl);
 

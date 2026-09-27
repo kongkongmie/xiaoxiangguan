@@ -820,7 +820,7 @@ async function api(req, res, url) {
     } else for (const chapter of book.chapters) if (!body.chapterIds?.length || body.chapterIds.includes(chapter.id)) hydrated.push({ ...chapter, source: await readChapterText(bookRoot(book), chapter, "source"), translation: await readChapterText(bookRoot(book), chapter, "current") });
     const selectionSuffix = body.selectionOnly ? "selections" : body.chapterIds?.length ? "selected" : (body.includeDraft ? "draft" : "approved");
     const exportId = `export-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
-    const filename = hydrated.length === 1 ? `${safeName(hydrated[0].title)}${body.includeDraft ? "-草稿" : ""}-${exportId}.epub` : `${safeName(book.title)}-${selectionSuffix}-${exportId}.epub`; const outputPath = join(EXPORTS, filename);
+    const filename = `xiaoxiangguan-${selectionSuffix}-${exportId}.epub`; const outputPath = join(EXPORTS, filename);
     const result = await createEpub({ book, chapters: hydrated, outputPath, includeDraft: Boolean(body.includeDraft) });
     const included = new Set(result.chapterIds);
     if (!body.selectionOnly) for (const chapter of book.chapters) if (included.has(chapter.id)) chapter.exportedAt = new Date().toISOString();
