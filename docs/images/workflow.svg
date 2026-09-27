@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="260" viewBox="0 0 1200 260" role="img" aria-labelledby="title desc">
+  <title id="title">瀟湘館五步使用流程</title>
+  <desc id="desc">配置引擎、导入书籍、选择章节、翻译与校订、导出 EPUB</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#9ba8b7"/>
+    </marker>
+    <style>
+      .label { font: 600 20px "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #12385f; }
+      .sub { font: 14px "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #63758a; }
+      .num { font: 700 14px Georgia, serif; fill: #0b478c; letter-spacing: 1px; }
+      .icon { fill: none; stroke: #0b478c; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1200" height="260" rx="18" fill="#fbfaf6"/>
+  <path d="M220 130H252 M456 130H488 M692 130H724 M928 130H960" stroke="#9ba8b7" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <g transform="translate(24 28)">
+    <rect width="196" height="204" rx="14" fill="#ffffff" stroke="#d8e1ea"/>
+    <rect width="196" height="7" rx="3.5" fill="#0b478c"/>
+    <text class="num" x="18" y="34">01</text>
+    <g class="icon" transform="translate(74 51)">
+      <circle cx="24" cy="24" r="20"/><path d="M24 14v20M14 24h20"/>
+    </g>
+    <text class="label" x="98" y="132" text-anchor="middle">配置引擎</text>
+    <text class="sub" x="98" y="160" text-anchor="middle">API 或本机 CLI</text>
+  </g>
+
+  <g transform="translate(260 28)">
+    <rect width="196" height="204" rx="14" fill="#ffffff" stroke="#d8e1ea"/>
+    <rect width="196" height="7" rx="3.5" fill="#f0cf63"/>
+    <text class="num" x="18" y="34">02</text>
+    <g class="icon" transform="translate(74 51)">
+      <path d="M10 8h22l8 8v32H10zM32 8v10h8M18 30h14M18 38h14"/>
+    </g>
+    <text class="label" x="98" y="132" text-anchor="middle">导入书籍</text>
+    <text class="sub" x="98" y="160" text-anchor="middle">EPUB · PDF · AZW3</text>
+  </g>
+
+  <g transform="translate(496 28)">
+    <rect width="196" height="204" rx="14" fill="#ffffff" stroke="#d8e1ea"/>
+    <rect width="196" height="7" rx="3.5" fill="#0b478c"/>
+    <text class="num" x="18" y="34">03</text>
+    <g class="icon" transform="translate(74 51)">
+      <rect x="8" y="8" width="36" height="40" rx="3"/><path d="M16 20l4 4 8-9M16 34h20"/>
+    </g>
+    <text class="label" x="98" y="132" text-anchor="middle">选择章节</text>
+    <text class="sub" x="98" y="160" text-anchor="middle">按需批量处理</text>
+  </g>
+
+  <g transform="translate(732 28)">
+    <rect width="196" height="204" rx="14" fill="#ffffff" stroke="#d8e1ea"/>
+    <rect width="196" height="7" rx="3.5" fill="#8c304a"/>
+    <text class="num" x="18" y="34">04</text>
+    <g class="icon" transform="translate(74 51)">
+      <path d="M8 12h16c6 0 10 4 10 10v26c0-6-4-10-10-10H8zM48 12H32M32 48c0-6 4-10 10-10h6V12"/>
+    </g>
+    <text class="label" x="98" y="132" text-anchor="middle">翻译与校订</text>
+    <text class="sub" x="98" y="160" text-anchor="middle">原译对照 · 版本保护</text>
+  </g>
+
+  <g transform="translate(968 28)">
+    <rect width="208" height="204" rx="14" fill="#fff8dc" stroke="#e1cb78"/>
+    <rect width="208" height="7" rx="3.5" fill="#f0cf63"/>
+    <text class="num" x="18" y="34">05</text>
+    <g class="icon" transform="translate(80 51)">
+      <path d="M24 8v28M14 26l10 10 10-10M8 44h32"/>
+    </g>
+    <text class="label" x="104" y="132" text-anchor="middle">导出 EPUB</text>
+    <text class="sub" x="104" y="160" text-anchor="middle">保留原书名 · 跨设备阅读</text>
+  </g>
+</svg>

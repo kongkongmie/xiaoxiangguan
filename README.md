@@ -2,6 +2,16 @@
 
 瀟湘館是本机运行的单人翻译与阅读工作台。导入无 DRM 的 EPUB、PDF 或 AZW3，自动整理章节，用自己的模型 API 或已安装的 Codex、OpenCode、Antigravity CLI 翻译为简体中文，边译边读，校订后导出 EPUB。支持日语、英语、法语、德语、西班牙语原文。界面和书库仅在本机 127.0.0.1 提供服务；项目不提供账号或云同步。
 
+## 使用流程
+
+![瀟湘館五步使用流程](docs/images/workflow.svg)
+
+从配置翻译引擎到导出 EPUB，完整流程只需五步。下面的演示书库使用虚构书籍与虚构译文，不包含真实作品、个人数据或 API 密钥。
+
+![瀟湘館演示书库](docs/images/guide-library.jpg)
+
+**[查看完整图解操作教程](docs/getting-started.md)**，其中包含翻译引擎设置、导入、章节选择、双栏校订与 Apple“图书”兼容导出的逐步说明。
+
 ## 安装与启动
 
 需要 Node.js 20 或更新版本，以及 Python 3。先安装 Python 依赖：
