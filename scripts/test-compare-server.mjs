@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { comparableVersions, compareUnits } from "../public/compare-core.js";
+import { comparableVersions, partialVersions, compareUnits } from "../public/compare-core.js";
 
 const folder = await mkdtemp(join(tmpdir(), "xxg-compare-"));
 // Each mock model signs its translation with its own name so versions are distinguishable.
@@ -85,6 +85,21 @@ try {
   chapter = await call("GET", "/api/books/book/chapters/c1");
   assert.equal(chapter.revisionHistory.find((r) => r.id === chapter.activeRevisionId).engine.profileName, "模型乙");
   assert.equal(comparableVersions(chapter, ids, profiles).length, 4, "the restored copy folds into its original");
+
+  // A second opinion on one paragraph from another engine, then used to replace just that paragraph.
+  await call("POST", "/api/books/book/chapters/c1/translate", { mode: "draft", range: { type: "paragraphs", start: 2, end: 2 }, profileId: a.id }); await idle();
+  chapter = await call("GET", "/api/books/book/chapters/c1");
+  const excerpt = chapter.segments[0]; assert.equal(excerpt.engine.profileName, "模型甲");
+  assert.deepEqual(partialVersions(chapter, ids, profiles).map((v) => v.label), ["模型甲 · 节选"]);
+  const current = comparableVersions(chapter, ids, profiles).find((v) => v.active);
+  const before = chapter.translation.trimEnd().split("\n\n");
+  await call("POST", "/api/books/book/chapters/c1/compose", { note: "第 2 段 → 模型甲", choices: [{ ids: [ids[0]], revisionId: current.id }, { ids: [ids[1]], revisionId: excerpt.id }, { ids: [ids[2]], revisionId: current.id }] });
+  chapter = await call("GET", "/api/books/book/chapters/c1");
+  assert.deepEqual(chapter.translation.trimEnd().split("\n\n"), [before[0], "model-a 译第1段。", before[2]], "only the chosen paragraph changed");
+  assert.match(chapter.revisionHistory.at(-1).reason, /读者替换：第 2 段/);
+  // Editing the excerpt into a different shape retires it from comparison instead of showing stale text.
+  await call("PATCH", `/api/books/book/chapters/c1/segments/${excerpt.id}`, { translation: "一\n\n二" });
+  assert.equal(partialVersions(await call("GET", "/api/books/book/chapters/c1"), ids, profiles).length, 0);
 
   // Switching and housekeeping.
   assert.equal((await call("POST", `/api/engine-profiles/${a.id}/activate`)).model, "model-a");

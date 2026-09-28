@@ -95,6 +95,29 @@ export function comparableVersions(chapter, paragraphIds, profiles = []) {
   return versions;
 }
 
+// Excerpt translations (a few paragraphs, often a quick second opinion from another engine) join the comparison
+// wherever they cover a whole unit. They never become chips or a fallback for the whole chapter.
+export function partialVersions(chapter, paragraphIds, profiles = []) {
+  const position = new Map(paragraphIds.map((id, i) => [id, i]));
+  const result = [];
+  for (const entry of chapter?.segments || []) {
+    if (entry.alignedStale) continue;
+    const ids = Array.isArray(entry.segments) ? entry.segments.flatMap((s) => s.sourceParagraphIds || []) : [];
+    const first = position.get(ids[0]);
+    // Must still be a contiguous, ordered run of the current source paragraphs.
+    if (!ids.length || first === undefined || ids.some((id, k) => position.get(id) !== first + k)) continue;
+    const engine = entry.engine || null;
+    result.push({ id: entry.id, memberIds: [entry.id], kind: "节选", partial: true, active: false, createdAt: entry.createdAt || "", engine,
+      name: engine ? engineName(engine, profiles) : "节选译文", color: engine ? engineColor(engine, profiles) : MIX_COLOR,
+      segments: entry.segments.map((s) => ({ sourceParagraphIds: s.sourceParagraphIds, text: entry.status === "failed" ? "" : s.text })), segmentSources: null });
+  }
+  result.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+  const seen = new Map();
+  for (const v of result) { const n = (seen.get(v.name) || 0) + 1; seen.set(v.name, n); v.ordinal = n; }
+  for (const v of result) { v.tag = (seen.get(v.name) || 0) > 1 ? `节选 ${v.ordinal}` : "节选"; v.label = `${v.name} · ${v.tag}`; }
+  return result;
+}
+
 // Split the chapter where no version merges across the boundary, so every unit maps to whole segments in every version.
 export function compareUnits(paragraphIds, versions) {
   const blocked = new Set();
@@ -109,7 +132,11 @@ export function compareUnits(paragraphIds, versions) {
     if (blocked.has(i)) continue;
     const ids = paragraphIds.slice(start, i + 1);
     const texts = {};
-    for (const version of versions) texts[version.id] = segmentsWithin(version.segments, ids).map((s) => s.text).join("\n\n");
+    for (const version of versions) {
+      const inside = segmentsWithin(version.segments, ids);
+      // Excerpts only speak for units they cover completely.
+      if (JSON.stringify(inside.flatMap((s) => s.sourceParagraphIds)) === JSON.stringify(ids)) texts[version.id] = inside.map((s) => s.text).join("\n\n");
+    }
     units.push({ key: ids.join(" "), ids, texts });
     start = i + 1;
   }

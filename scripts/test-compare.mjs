@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { comparableVersions, compareUnits, composeRevision, engineColor, engineKey, engineLabel, sourceMarks, VERSION_PALETTE, MIX_COLOR, CUSTOM_COLOR } from "../public/compare-core.js";
+import { comparableVersions, partialVersions, compareUnits, composeRevision, engineColor, engineKey, engineLabel, sourceMarks, VERSION_PALETTE, MIX_COLOR, CUSTOM_COLOR } from "../public/compare-core.js";
 
 const ids = ["p1", "p2", "p3", "p4"];
 const seg = (idList, text) => ({ sourceParagraphIds: idList, text });
@@ -70,4 +70,20 @@ assert.equal(engineColor(sonnet, profiles), "#b5485d", "unlabelled runs match a 
 assert.equal(comparableVersions(chapter, ids, profiles)[0].name, "阿青");
 assert.equal(engineLabel({ backend: "codex" }), "Codex · 默认模型");
 assert.equal(engineKey({ backend: "http", baseUrl: "https://api.x.com/v1?k=secret", model: "m" }).includes("secret"), false);
-console.log("compare: versions, units, compose, provenance and colours passed");
+// Excerpts: a second opinion on p2–p3 from another engine joins those units only.
+const withExcerpt = { ...chapter, segments: [
+  { id: "seg-codex", createdAt: "2026-09-28T07:00:00Z", engine: { backend: "codex", model: "gpt" }, segments: [seg(["p2"], "C2"), seg(["p3"], "C3")] },
+  { id: "seg-stale", segments: [seg(["gone"], "x")] },
+  { id: "seg-gap", segments: [seg(["p1"], "x"), seg(["p3"], "y")] },
+  { id: "seg-edited", alignedStale: true, segments: [seg(["p4"], "old")] }
+] };
+const partials = partialVersions(withExcerpt, ids);
+assert.deepEqual(partials.map((v) => [v.id, v.label, v.partial]), [["seg-codex", "Codex · gpt · 节选", true]]);
+const mixedUnits = compareUnits(ids, [...versions, ...partials]);
+assert.deepEqual(mixedUnits.map((u) => u.key), ["p1", "p2 p3", "p4"], "excerpt boundaries do not split merged units");
+assert.equal(mixedUnits[1].texts["seg-codex"], "C2\n\nC3"); assert.equal(mixedUnits[0].texts["seg-codex"], undefined);
+const withPartial = composeRevision(ids, [...versions, ...partials], [{ ids: ["p1"], revisionId: "r-deep" }, { ids: ["p2", "p3"], revisionId: "seg-codex" }, { ids: ["p4"], revisionId: "r-deep" }]);
+assert.deepEqual(withPartial.segments.map((s) => s.text), ["D1", "C2", "C3", "D4"]);
+assert.equal(withPartial.segmentSources[1].engine.backend, "codex");
+assert.throws(() => composeRevision(ids, [...versions, ...partials], [{ ids: ["p1"], revisionId: "seg-codex" }, { ids: ["p2", "p3"], revisionId: "r-deep" }, { ids: ["p4"], revisionId: "r-deep" }]), /分段不同/);
+console.log("compare: versions, excerpts, units, compose, provenance and colours passed");

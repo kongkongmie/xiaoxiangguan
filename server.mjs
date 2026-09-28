@@ -15,7 +15,7 @@ import { analyzeChapterEntities, checkControl, waitControl, extractDocument, ide
 import { SOURCE_LANGUAGES, sourceLanguage } from "./public/languages.js";
 import { searchResearchSources, verifyIssue } from "./lib/research.mjs";
 import { createSearchBudget } from "./lib/search-budget.mjs";
-import { comparableVersions, composeRevision, engineKey, isVersionColor, VERSION_PALETTE } from "./public/compare-core.js";
+import { comparableVersions, partialVersions, composeRevision, engineKey, isVersionColor, VERSION_PALETTE } from "./public/compare-core.js";
 import { activeRevisionPath, preserveLegacyRevision, canAutoRevise, canAutoReviseFromEvidence, newRevisionId, preserveChapterRevisionState } from "./lib/revisions.mjs";
 import { dataRoot } from "./lib/data-paths.mjs";
 import { toolCandidates } from "./lib/tool-paths.mjs";
@@ -488,7 +488,7 @@ async function translateBookChapter(bookId, chapterId, mode, range, retry = fals
         checkControl(control);
         const protectedRevision = (chapter.activeRevisionId || chapter.revisionId || null) !== startingRevisionId || chapter.draftOrigin === "reader" || chapter.status === "approved" || chapter.exportedAt;
         if (selected.partial) {
-          chapter.segments ||= []; chapter.segments.unshift({ id: `segment-${revisionId}`, label: selected.label, range: selected.range, sourceParagraphIds: paragraphs.map((p) => p.id), segments: result.segments, source: selected.source, translationPath: outputPath, status: "review", createdAt: new Date().toISOString() });
+          chapter.segments ||= []; chapter.segments.unshift({ id: `segment-${revisionId}`, label: selected.label, range: selected.range, sourceParagraphIds: paragraphs.map((p) => p.id), segments: result.segments, engine, source: selected.source, translationPath: outputPath, status: "review", createdAt: new Date().toISOString() });
         } else {
           chapter.revisionHistory.push({ id: revisionId, path: outputPath, origin: "ai", segments: result.segments, engine, blockEngines: result.blocks.map((b) => ({ id: b.id, sourceParagraphIds: b.sourceParagraphIds, engine: b.engine })), createdAt: new Date().toISOString(), reason: protectedRevision ? "新译稿已保留，读者版本未覆盖；可在历史中采用" : mode === "refine" ? "AI 精校" : "AI 初译" });
           if (!protectedRevision) {
@@ -772,7 +772,8 @@ async function api(req, res, url) {
     if (!chapter) return json(res, 404, { error: "章节不存在" });
     if (book.demo) return json(res, 409, { error: "演示作品不支持合成译稿" });
     const root = bookRoot(book); const ids = sourceParagraphs(await readChapterText(root, chapter, "source"), chapter.id).map((p) => p.id);
-    const versions = comparableVersions(chapter, ids, (await listProfiles()).profiles);
+    const profiles = (await listProfiles()).profiles;
+    const versions = [...comparableVersions(chapter, ids, profiles), ...partialVersions(chapter, ids, profiles)];
     const composed = composeRevision(ids, versions, body.choices);
     await preserveExistingRevision(root, chapter);
     const revisionId = newRevisionId(); const path = await writeTranslation(root, chapter, composed.text, false, `mix-${revisionId}`);
@@ -780,7 +781,7 @@ async function api(req, res, url) {
     // A composed text is the reader's decision: later AI runs are kept in history instead of replacing it.
     chapter.draftOrigin = "reader"; chapter.status = "review"; chapter.exportedAt = null; chapter.updatedAt = new Date().toISOString();
     chapter.revisionHistory ||= [];
-    chapter.revisionHistory.push({ id: revisionId, path, origin: "mix", segments: composed.segments, segmentSources: composed.segmentSources, createdAt: chapter.updatedAt, reason: `多译本合成：${composed.summary}` });
+    chapter.revisionHistory.push({ id: revisionId, path, origin: "mix", segments: composed.segments, segmentSources: composed.segmentSources, createdAt: chapter.updatedAt, reason: typeof body.note === "string" && body.note.trim() ? `读者替换：${body.note.trim().slice(0, 80)}` : `多译本合成：${composed.summary}` });
     delete chapter.composeDraft;
     await saveLibrary(data); await syncProjectState(book); return json(res, 200, { revisionId, summary: composed.summary });
   });
@@ -792,7 +793,15 @@ async function api(req, res, url) {
   if (req.method === "PATCH" && segmentMatch) {
     const body = await readJson(req); const data = await readLibrary(); const book = data.books.find((item) => item.id === segmentMatch[1]); const chapter = book?.chapters.find((item) => item.id === segmentMatch[2]); const segment = chapter?.segments?.find((item) => item.id === segmentMatch[3]);
     if (!segment) return json(res, 404, { error: "节选译文不存在" });
-    if (body.translation !== undefined) await writeFile(join(bookRoot(book), segment.translationPath), `${String(body.translation).trim()}\n`, "utf8");
+    if (body.translation !== undefined) {
+      await writeFile(join(bookRoot(book), segment.translationPath), `${String(body.translation).trim()}\n`, "utf8");
+      // Keep the aligned copy honest: same paragraph count updates it, anything else retires it from comparison.
+      if (Array.isArray(segment.segments)) {
+        const parts = String(body.translation).trim().split(/\n\s*\n/).map((t) => t.trim()).filter(Boolean);
+        if (parts.length === segment.segments.length) { segment.segments = segment.segments.map((s, i) => ({ ...s, text: parts[i] })); delete segment.alignedStale; }
+        else segment.alignedStale = true;
+      }
+    }
     if (["review", "approved"].includes(body.status)) segment.status = body.status;
     segment.updatedAt = new Date().toISOString(); await saveLibrary(data); return json(res, 200, segment);
   }

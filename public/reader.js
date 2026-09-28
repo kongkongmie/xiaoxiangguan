@@ -74,8 +74,8 @@ export function mountReader({ container, book, chapter, request, notify, navigat
   </section>`;
   const $ = (selector) => container.querySelector(selector);
   const room = $(".reading-room"), sourcePane = $("#source-scroll"), translatedPane = $("#translation-scroll"), read = $("#translation-read"), editor = $("#translation");
-  const compare = createCompare({ room, strip: $("#version-strip"), view: $("#compare-view"), bar: $("#compose-bar"), read, book, request, notify, configure, isEditing: () => editing,
-    retranslate: (profileId) => startTranslation("draft", { type: "whole" }, false, profileId),
+  const compare = createCompare({ room, strip: $("#version-strip"), view: $("#compare-view"), bar: $("#compose-bar"), read, book, request, notify, configure, isEditing: () => editing, sourceLang,
+    translate: (profileId, range) => startTranslation("draft", range, false, profileId),
     onComposed: async () => { try { update(await request(`/api/books/${book.id}/chapters/${chapter.id}`)); } catch (e) { notify(e.message); } } });
   compare.onViewChange = () => { const anchor = capture(translatedPane); update(current); if (anchor) locate(translatedPane, anchor); };
   const syncApproval = () => {
@@ -158,6 +158,7 @@ export function mountReader({ container, book, chapter, request, notify, navigat
       const paragraphId = idsOf(node)[0];
       highlightParagraph(paragraphId);
       revealCounterpart(pane === sourcePane ? translatedPane : sourcePane, paragraphId);
+      compare.paragraphClicked(paragraphId);
       clearTimeout(anchorTimer); saveAnchor();
     });
   }
