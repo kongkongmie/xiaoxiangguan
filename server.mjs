@@ -150,7 +150,7 @@ async function discoverProviderModels(provider, refresh = false) {
 async function saveProvider(body) {
   const existing = await readProvider();
   const backend = body.backend || existing.backend || "http";
-  if (!["http", "codex", "opencode", "antigravity"].includes(backend)) throw new Error("不支持的翻译引擎");
+  if (!["http", "codex", "opencode", "antigravity", "claude"].includes(backend)) throw new Error("不支持的翻译引擎");
   const protocol = String(body.protocol || existing.protocol);
   if (!["openai-chat", "openai-responses"].includes(protocol)) throw new Error("不支持的接口协议");
   const baseUrl = String(body.baseUrl ?? existing.baseUrl).trim().replace(/\/+$/, "");
