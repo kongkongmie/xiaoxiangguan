@@ -74,6 +74,22 @@ for (const record of manifest.chapters) { const candidate = await readFile(join(
 assert.match(extractedText, /第一段落/);
 const structured = await extractDocument({ book: { id: "structured-book", title: "抽出試験", format: "EPUB", sourceFile: sourceEpub }, bookRoot: join(tempRoot, "structured-book") });
 assert.deepEqual(structured.chapters.map((chapter) => chapter.title), ["第一章　始まり", "第二章　続き"]);
+
+const completeTocEpub = join(root, "exports", "_complete-toc-source.epub");
+const completeTocTitles = ["まえがき", "北畠家の一門", "顕家の西上", "あとがき"];
+await createEpub({
+  book: { title: "完全な目次", author: "测试" },
+  chapters: completeTocTitles.map((title, index) => ({
+    id: `toc-${index + 1}`,
+    title,
+    status: "approved",
+    translation: `${title}の本文です。`.repeat(30)
+  })),
+  outputPath: completeTocEpub,
+  includeDraft: false
+});
+const completeToc = await extractDocument({ book: { id: "complete-toc-book", title: "完全な目次", format: "EPUB", sourceFile: completeTocEpub }, bookRoot: join(tempRoot, "complete-toc-book") });
+assert.deepEqual(completeToc.chapters.map((chapter) => chapter.title), completeTocTitles, "a complete EPUB table of contents must preserve every declared chapter boundary");
 console.log("EPUB extraction checks passed");
 
 const testPdf = join(tempRoot, "sample.pdf");
@@ -169,5 +185,5 @@ const chapter = { id: "chapter-0001", translationPath: "" }; const projectRoot =
 chapter.translationPath = await writeTranslation(projectRoot, chapter, translated.text, false);
 assert.match(await readChapterText(projectRoot, chapter, "translation"), /第二段译文/);
 await new Promise((resolveClose) => mock.close(resolveClose));
-await unlink(sourceEpub); await rm(tempRoot, { recursive: true, force: true });
+await unlink(sourceEpub); await unlink(completeTocEpub); await rm(tempRoot, { recursive: true, force: true });
 console.log("Translation API and durable file checks passed");
