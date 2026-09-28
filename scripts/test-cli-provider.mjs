@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cliEventParser, cliInvocation, runCliProcess } from "../lib/cli-provider.mjs";
+import { cliEventParser, cliInvocation, runCliProcess, claudeAuthProblem, probeCli } from "../lib/cli-provider.mjs";
 import { assertFinished } from "../lib/providers.mjs";
-import { discoverCodexModels, parseOpenCodeModels, parseAntigravityModels, validateCliChoice } from "../lib/cli-models.mjs";
+import { discoverCodexModels, parseOpenCodeModels, parseAntigravityModels, validateCliChoice, claudeModels } from "../lib/cli-models.mjs";
 
 const events = {
   codex: [{ type: "thread.started", thread_id: "codex-1" }, { type: "item.completed", item: { type: "agent_message", text: "译文正文" } }, { type: "turn.completed", usage: { input_tokens: 8, output_tokens: 4 } }],
   opencode: [{ type: "text", sessionID: "oc-1", part: { text: "译文正文" } }, { type: "step_finish", part: { reason: "stop", tokens: { input: 8, output: 4 } } }],
-  antigravity: [{ event: "result", result: { conversation_id: "agy-1", status: "SUCCESS", response: "译文正文", usage: { input_tokens: 8, output_tokens: 4 } } }]
+  antigravity: [{ event: "result", result: { conversation_id: "agy-1", status: "SUCCESS", response: "译文正文", usage: { input_tokens: 8, output_tokens: 4 } } }],
+  claude: [{ type: "system", subtype: "init", session_id: "cc-1" }, { type: "assistant", session_id: "cc-1", message: { content: [{ type: "text", text: "译文正文" }] } }, { type: "result", subtype: "success", is_error: false, stop_reason: "end_turn", result: "译文正文", session_id: "cc-1", usage: { input_tokens: 8, output_tokens: 4 } }]
 };
 for (const [backend, stream] of Object.entries(events)) {
   const parser = cliEventParser(backend); stream.forEach((event) => parser.push(event));
@@ -25,15 +26,21 @@ validateCliChoice({ backend: "opencode", model: "vendor/model", reasoningEffort:
 assert.throws(() => validateCliChoice({ backend: "opencode", model: "vendor/model", reasoningEffort: "high" }, catalog), /未提供/);
 assert.throws(() => validateCliChoice({ backend: "codex", model: "--bad" }), /模型 ID/);
 assert.throws(() => validateCliChoice({ backend: "antigravity", model: "gemini", reasoningEffort: "ultra" }, catalog), /强度无效/);
+validateCliChoice({ backend: "claude", model: "opus", reasoningEffort: "xhigh" }, { models: claudeModels });
+assert.throws(() => validateCliChoice({ backend: "claude", model: "haiku", reasoningEffort: "high" }, { models: claudeModels }), /未提供/);
+assert.throws(() => validateCliChoice({ backend: "claude", model: "opus", reasoningEffort: "ultra" }, { models: claudeModels }), /强度无效/);
+{ const cc = cliInvocation("claude", { model: "sonnet", reasoningEffort: "low", folder: "C:/temp/safe", prompt: "正文", runId: "r", timeoutMs: 1000 });
+  assert.equal(cc.args[cc.args.indexOf("--tools") + 1], ""); assert.ok(cc.args.includes("--safe-mode") && cc.args.includes("--no-session-persistence")); assert.equal(cc.input, "正文"); }
+{ const refused = cliEventParser("claude"); refused.push({ type: "result", subtype: "success", is_error: false, stop_reason: "refusal", result: "", session_id: "cc-4" }); assert.throws(() => assertFinished(refused.result()), (e) => e.code !== "INCOMPLETE_OUTPUT"); }
 assert.deepEqual(parseAntigravityModels('MODEL NAME\ngemini-test Gemini Test\n')[0].reasoningEfforts, ["low", "medium", "high"]);
-for (const [backend, event] of [["codex", { type: "turn.failed" }], ["opencode", { type: "step_finish", part: { reason: "length" } }], ["antigravity", { event: "result", result: { status: "WAITING", response: "半句" } }]]) {
+for (const [backend, event] of [["codex", { type: "turn.failed" }], ["opencode", { type: "step_finish", part: { reason: "length" } }], ["antigravity", { event: "result", result: { status: "WAITING", response: "半句" } }], ["claude", { type: "result", subtype: "success", is_error: false, stop_reason: "max_tokens", result: "半句", session_id: "cc-2" }], ["claude", { type: "result", subtype: "error_during_execution", is_error: true, session_id: "cc-3" }]]) {
   const parser = cliEventParser(backend); parser.push(event); assert.throws(() => assertFinished(parser.result()), /未完整结束/);
 }
 const empty = cliEventParser("codex"); empty.push({ type: "item.completed", item: { type: "agent_message", text: "partial" } }); assert.throws(() => assertFinished(empty.result()), /未完整结束/);
 const failed = cliEventParser("codex"); failed.push({ type: "error" }); events.codex.forEach((e) => failed.push(e)); assert.throws(() => assertFinished(failed.result()), /未完整结束/);
 for (const [backend, stream] of Object.entries(events)) {
   const parser = cliEventParser(backend); stream.forEach((event) => parser.push(event));
-  const alien = backend === "codex" ? { type: "thread.started", thread_id: "other-run" } : backend === "opencode" ? { type: "text", sessionID: "other-run" } : { event: "result", result: { conversation_id: "other-run" } };
+  const alien = backend === "codex" ? { type: "thread.started", thread_id: "other-run" } : backend === "opencode" ? { type: "text", sessionID: "other-run" } : backend === "claude" ? { type: "assistant", session_id: "other-run" } : { event: "result", result: { conversation_id: "other-run" } };
   assert.throws(() => parser.push(alien), /其他会话/);
 }
 const folder = await mkdtemp(join(tmpdir(), "xxg-cli-test-"));
@@ -52,5 +59,16 @@ try {
   const models = await discoverCodexModels("fixture", folder, (options) => runCliProcess({ ...options, executable: process.execPath, args: [rpcFixture] }), 2000);
   assert.deepEqual(models.map((m) => m.id), ["model-a", "model-b"]); assert.equal(JSON.stringify(models).includes("not-returned"), false);
   assert.deepEqual(models[0].reasoningEfforts, ["low", "high"]);
+  assert.ok(claudeAuthProblem("Failed to authenticate: OAuth session expired and could not be refreshed")); assert.equal(claudeAuthProblem("API Error: 529 overloaded"), false);
+  for (const [loggedIn, code, expected] of [[false, 1, "logged-out"], [true, 0, "logged-in"]]) {
+    const fake = join(folder, `claude-${expected}.mjs`);
+    await writeFile(fake, `if (process.argv[2] === "auth") { console.log(JSON.stringify({ loggedIn: ${loggedIn} })); process.exit(${code}); } console.log("9.9.9 (Claude Code)");`);
+    const fakeExe = join(folder, `claude-${expected}${process.platform === "win32" ? ".exe" : ""}`); await writeFile(fakeExe, `#!/bin/sh\nexec "${process.execPath}" "${fake}" "$@"\n`, { mode: 0o755 });
+    if (process.platform !== "win32") assert.equal((await probeCli("claude", fakeExe)).login, expected);
+  }
+  { const fake = join(folder, "claude-expired.sh");
+    await writeFile(fake, `#!/bin/sh\ncat >/dev/null\necho '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate: OAuth session expired","session_id":"s9"}'\nexit 1\n`, { mode: 0o755 });
+    const { generateCli } = await import("../lib/cli-provider.mjs");
+    if (process.platform !== "win32") await assert.rejects(generateCli({ provider: { backend: "claude", cliPath: fake }, messages: [{ role: "user", content: "x" }] }), /未登录或登录已过期.*\/login/); }
   console.log("CLI contracts: final events, failure/truncation, stdin, UTF-8, stderr isolation, cancellation and timeout passed");
 } finally { await rm(folder, { recursive: true, force: true }); }

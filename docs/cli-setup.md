@@ -1,6 +1,6 @@
 # CLI 安装与接入
 
-瀟湘館支持 Codex、OpenCode 和独立 Antigravity CLI（`agy`）。只安装要用的引擎即可。工作台会调用本机 CLI，沿用该 CLI 的账号、服务商和模型配置；它不负责替你登录。使用翻译 API 时不需要安装这些 CLI。
+瀟湘館支持 Codex、OpenCode、独立 Antigravity CLI（`agy`）和 Claude Code CLI（`claude`）。只安装要用的引擎即可。工作台会调用本机 CLI，沿用该 CLI 的账号、服务商和模型配置；它不负责替你登录。使用翻译 API 时不需要安装这些 CLI。
 
 下面的安装命令由你在终端执行。Windows 运行本工作台时使用原生 Windows CLI；本项目没有提供 Windows 后台跨 WSL 调用的桥接。
 
@@ -118,6 +118,37 @@ agy
 
 可再运行 `agy models` 查看模型目录。工作台使用独立 `agy` 的 JSON 输入/输出协议，强度为 `low` / `medium` / `high`；编辑器启动命令 `antigravity` 不适用于该接入方式。
 
+## Claude Code CLI（claude）
+
+### 安装
+
+Windows PowerShell：
+
+```powershell
+irm https://claude.ai/install.ps1 | iex
+```
+
+macOS / Linux：
+
+```sh
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+也可用 `npm install -g @anthropic-ai/claude-code` 安装。原生安装的程序位置为 Windows 的 `%USERPROFILE%\.local\bin\claude.exe` 或 macOS/Linux 的 `~/.local/bin/claude`；npm 安装时，PATH 上的 `claude.cmd` 只是包装脚本，工作台会自动改用同目录 `node_modules\@anthropic-ai\claude-code\bin\claude.exe`。来源：[官方安装说明](https://code.claude.com/docs/en/setup)。
+
+### 授权与检查
+
+打开新终端，运行：
+
+```sh
+claude --version
+claude
+```
+
+首次运行 `claude` 会打开浏览器登录，可使用 Claude 订阅账号或 Console 账号；按提示完成后退出交互界面。
+
+工作台以非交互模式调用 `claude -p`，参数为 `--tools ""`（不提供任何工具）、`--safe-mode`、`--strict-mcp-config` 与 `--no-chrome`（不加载 CLAUDE.md、插件、hooks、MCP 与浏览器集成）、`--no-session-persistence`（不保存会话记录），并用中立的系统提示替换默认的编程助手提示。Claude Code 没有列出模型的命令，“读取模型与强度”返回内置别名 `sonnet`、`opus`、`fable`、`haiku`，每个别名自动指向账号可用的最新版本；强度对应 `--effort` 的 `low` / `medium` / `high` / `xhigh` / `max`。模型拒绝会记为失败块，不会作为译文保存。
+
 ## 在瀟湘館中接入
 
 1. 在 CLI 中完成登录或服务商配置后，打开瀟湘館的“设置 → 翻译引擎”。
@@ -129,11 +160,11 @@ agy
 Windows 可用下列命令查找 PATH 上的原生程序；只查你已经安装的引擎即可：
 
 ```powershell
-Get-Command codex.exe, opencode.exe, agy.exe -ErrorAction SilentlyContinue |
+Get-Command codex.exe, opencode.exe, agy.exe, claude.exe -ErrorAction SilentlyContinue |
   Select-Object Name, Source
 ```
 
-也可在启动后台前设置 `CODEX_PATH`、`OPENCODE_PATH`、`ANTIGRAVITY_PATH`。例如 PowerShell 中设置 `$env:ANTIGRAVITY_PATH = 'C:\Tools\agy\agy.exe'` 后，在同一终端启动工作台。这些值是程序路径，不是账号密钥。
+也可在启动后台前设置 `CODEX_PATH`、`OPENCODE_PATH`、`ANTIGRAVITY_PATH`、`CLAUDE_PATH`。例如 PowerShell 中设置 `$env:ANTIGRAVITY_PATH = 'C:\Tools\agy\agy.exe'` 后，在同一终端启动工作台。这些值是程序路径，不是账号密钥。
 
 ## 常见问题
 
@@ -141,6 +172,7 @@ Get-Command codex.exe, opencode.exe, agy.exe -ErrorAction SilentlyContinue |
 | --- | --- |
 | 终端能运行，工作台检测不到 | 填写 `.exe` 绝对路径。若刚安装或改过 PATH，关闭后台后重新启动，让后台读取新环境。仅刷新网页不会更新后台环境变量。 |
 | 提示不能使用 shell 包装脚本 | Windows 请选择原生 `.exe`，而不是 npm 的 `.cmd` / `.ps1` 包装文件；优先使用上面的原生安装方式。 |
+| Claude Code 提示“未登录或登录已过期” | 订阅登录会过期。在终端运行 `claude`，输入 `/login` 按浏览器提示重新登录，再回设置页“测试并保存”。“检测安装”会同时读取 `claude auth status` 显示登录状态。若设置了 `CLAUDE_CONFIG_DIR`，请在同一环境下登录并启动后台。 |
 | 已检测到安装，但测试要求登录 | 在同一个系统用户下运行该 CLI，完成交互登录或服务商授权，再测试。 |
 | 模型可列出，但调用失败 | 检查模型权限、额度、网络及 CLI 提示；模型目录读取成功不等同于生成授权成功。 |
 | 提示未知参数或 JSON 事件不兼容 | 检查 CLI 版本；OpenCode 可使用上面已验证的 1.18.30。保留现有配置，先用一章或连接测试验证新版本。 |

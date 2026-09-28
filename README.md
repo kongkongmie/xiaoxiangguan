@@ -1,6 +1,6 @@
 # 瀟湘館
 
-瀟湘館是本机运行的单人翻译与阅读工作台。导入无 DRM 的 EPUB、PDF 或 AZW3，自动整理章节，用自己的模型 API 或已安装的 Codex、OpenCode、Antigravity CLI 翻译为简体中文，边译边读，校订后导出 EPUB。支持日语、英语、法语、德语、西班牙语原文。界面和书库仅在本机 127.0.0.1 提供服务；项目不提供账号或云同步。
+瀟湘館是本机运行的单人翻译与阅读工作台。导入无 DRM 的 EPUB、PDF 或 AZW3，自动整理章节，用自己的模型 API 或已安装的 Codex、OpenCode、Antigravity、Claude Code CLI 翻译为简体中文，边译边读，校订后导出 EPUB。支持日语、英语、法语、德语、西班牙语原文。界面和书库仅在本机 127.0.0.1 提供服务；项目不提供账号或云同步。
 
 ## 使用流程
 
@@ -56,6 +56,7 @@ Windows 可双击 start-library.cmd 启动，会打开网页和一个“瀟湘�
 | Codex | [官方独立安装器](https://learn.chatgpt.com/docs/config-file/environment-variables#installer-variables) | `codex --version`，再运行 `codex` 登录 |
 | OpenCode | [官方 1.18.30 发布包](https://github.com/anomalyco/opencode/releases/tag/v1.18.30)，解压原生 CLI | `opencode --version`，再运行 `opencode auth login` 配置服务商 |
 | Antigravity | [官方独立 CLI 安装器](https://antigravity.google/docs/cli/install) | `agy --version`，再运行 `agy` 完成授权 |
+| Claude Code | [官方安装说明](https://code.claude.com/docs/en/setup) | `claude --version`，再运行 `claude` 登录 |
 
 安装并登录后，在设置中选择引擎、点击“检测安装”和“读取模型与强度”。模型列表来自本机 CLI，使用账号实际可用的模型；可保留 CLI 默认模型，也可手动填写模型 ID。OpenCode 模型 ID 使用 `provider/model` 格式，本轮验证的是 1.x CLI。
 
@@ -66,10 +67,11 @@ Windows 可双击 start-library.cmd 启动，会打开网页和一个“瀟湘�
 | Codex | `app-server` 的 `model/list`；每个模型的 `supportedReasoningEfforts` |
 | OpenCode | `models --verbose`；各模型启用的 `variants` |
 | Antigravity | `agy models`；`low`、`medium`、`high` |
+| Claude Code | 无模型列表命令；内置 `sonnet`、`opus`、`fable`、`haiku` 别名，自动指向账号可用的最新版本；强度 `low` 至 `max`（`haiku` 仅默认强度） |
 
 强度选项随模型变化。选择后“保存引擎配置”，或“测试并保存”进行一次真实调用；保存配置本身不验证模型调用权限。排队任务使用入队时的引擎快照，修改设置只影响新任务。
 
-自动检测不到时填写原生可执行文件路径；Windows 需选择 `.exe`，不使用 `.cmd` / `.bat` 包装脚本。也可设置 `CODEX_PATH`、`OPENCODE_PATH`、`ANTIGRAVITY_PATH`。CLI 正文经 stdin 传入，任务使用临时目录；取消和超时会终止本次子进程。默认每块超时 5 分钟，用量未知时显示未知，CLI 不按 API 单价估算费用。
+自动检测不到时填写原生可执行文件路径；Windows 需选择 `.exe`，不使用 `.cmd` / `.bat` 包装脚本。也可设置 `CODEX_PATH`、`OPENCODE_PATH`、`ANTIGRAVITY_PATH`、`CLAUDE_PATH`。CLI 正文经 stdin 传入，任务使用临时目录；取消和超时会终止本次子进程。默认每块超时 5 分钟，用量未知时显示未知，CLI 不按 API 单价估算费用。
 
 ## 本机数据与迁移
 
