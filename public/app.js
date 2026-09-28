@@ -271,12 +271,12 @@ async function renderWorkspace(bookId, chapterId, anchor) {
     const book = selectedBook;
     reader = mountReader({ container: content, book, chapter, request, notify,
       navigate: (id, target) => renderWorkspace(bookId, id, target), back: () => { if (confirmDiscardReaderEdit()) renderBook(bookId); }, configure: () => switchView("settings"),
-      start: (mode, range, retry) => startTranslation(book, selectedChapter, mode, range, retry),
+      start: (mode, range, retry, profileId) => startTranslation(book, selectedChapter, mode, range, retry, profileId),
       save: async (translation, status) => { try { const payload = { status }; if (translation !== undefined) payload.translation = translation; const updated = await request(`/api/books/${bookId}/chapters/${chapterId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (translation !== undefined) selectedChapter.translation = translation; reader?.update(await request(`/api/books/${bookId}/chapters/${chapterId}`)); notify("修改已保存"); return true; } catch (e) { notify(e.message); return false; } },
       analyze: () => startChapterAnalysis(book, selectedChapter), exportBook: () => exportEpub(bookId, true, [chapterId]), onChapter: (value) => { selectedChapter = value; }, shutdown: shutdownWorkbench
     });
     const poll = async () => {
-      try { const [next, library] = await Promise.all([request(`/api/books/${bookId}/chapters/${chapterId}`), request("/api/library")]); if (token !== navigationId) return; data = library; const tasks = library.books.find((b) => b.id === bookId)?.tasks || []; const task = tasks.find((t) => t.chapterId === chapterId); reader?.update(next, task); }
+      try { const [next, library] = await Promise.all([request(`/api/books/${bookId}/chapters/${chapterId}`), request("/api/library")]); if (token !== navigationId) return; data = library; const tasks = library.books.find((b) => b.id === bookId)?.tasks || []; const mine = tasks.filter((t) => t.chapterId === chapterId); const task = mine.find((t) => t.status === "running") || mine.find((t) => ["queued", "paused"].includes(t.status)) || mine[0]; reader?.update(next, task); }
       catch (e) { if (token === navigationId) notify(e.message); }
       if (token === navigationId) readerPollTimer = setTimeout(poll, 1200);
     };
@@ -295,11 +295,12 @@ async function extractBook(bookId) {
   catch (error) { notify(error.message); }
 }
 
-async function startTranslation(book, chapter, mode, range = { type: "whole" }, retry = false) {
+async function startTranslation(book, chapter, mode, range = { type: "whole" }, retry = false, profileId) {
   try {
-    const settings = await request("/api/provider");
-    if ((!settings.backend || settings.backend === "http") && !(settings.baseUrl && settings.model && (settings.hasApiKey || settings.noAuth))) { notify("请先选择翻译引擎"); switchView("settings"); return; }
-    await request(`/api/books/${book.id}/chapters/${chapter.id}/translate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode, range, retry }) });
+    // A saved profile carries its own credentials; only the active engine needs checking here.
+    const settings = profileId ? null : await request("/api/provider");
+    if (settings && (!settings.backend || settings.backend === "http") && !(settings.baseUrl && settings.model && (settings.hasApiKey || settings.noAuth))) { notify("请先选择翻译引擎"); switchView("settings"); return; }
+    await request(`/api/books/${book.id}/chapters/${chapter.id}/translate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode, range, retry, ...(profileId ? { profileId } : {}) }) });
     notify(retry ? "已从未完成块继续" : "翻译已加入队列，可以继续阅读"); await load();
   } catch (error) { notify(error.message); }
 }
@@ -579,6 +580,7 @@ async function renderSettings() {
       <div id="provider-test-result" class="notice hidden"></div>
       <div class="dialog-actions"><button id="test-provider" type="button">测试并保存</button><button class="primary" type="submit">保存引擎配置</button></div>
     </form>
+    <section class="panel panel-pad profiles-panel" id="profiles-panel" aria-live="polite"><p class="profile-empty">正在读取引擎档案…</p></section>
     <form class="panel panel-pad settings-form" id="search-settings-form">
       <div class="section-head settings-head"><div><h2>联网搜索 API <span class="default-badge">可选 · 独立配置</span></h2><p>只用于少量高风险说法的 AI 查证；不影响初译、译名释义和读者注释。</p></div>${status(searchSettings.hasApiKey ? "approved" : "not_started", searchSettings.hasApiKey ? "已配置" : "可选")}</div>
       <p class="notice" id="search-usage-status">${escapeHtml(searchStatus(searchSettings))}。只有实际搜索请求计入额度；翻译模型用量单独计算。</p>
@@ -642,6 +644,47 @@ async function renderSettings() {
   document.querySelector("#search-settings-form").addEventListener("submit", saveSearchSettings);
   document.querySelector("#test-search-settings").addEventListener("click", testSearchSettings);
   updatePresetNote();
+  renderProfiles();
+}
+
+const ENGINE_NAMES = { http: "翻译 API", codex: "Codex CLI", opencode: "OpenCode CLI", antigravity: "Antigravity CLI", claude: "Claude Code CLI" };
+function engineSummary(p) {
+  const who = !p.backend || p.backend === "http" ? p.providerName || p.host || "翻译 API" : ENGINE_NAMES[p.backend] || p.backend;
+  return [who, p.model || "默认模型", p.reasoningEffort].filter(Boolean).join(" · ");
+}
+// Saved engines with a colour each; the reader uses the same names and colours for version comparison.
+async function renderProfiles() {
+  const box = document.querySelector("#profiles-panel"); if (!box) return;
+  let state;
+  try { state = await request("/api/engine-profiles"); } catch (error) { box.innerHTML = `<p class="profile-empty">无法读取引擎档案：${escapeHtml(error.message)}</p>`; return; }
+  if (!document.body.contains(box)) return;
+  const used = new Set(state.profiles.map((p) => p.color));
+  const nextColor = (state.palette.find((c) => !used.has(c.hex)) || state.palette[0]).hex;
+  const swatches = (name, selected) => `<div class="swatches" role="radiogroup" aria-label="颜色">${state.palette.map((c) => `<label class="swatch" style="--v:${c.hex}" title="${escapeAttribute(c.name)}"><input type="radio" name="${escapeAttribute(name)}" value="${c.hex}" ${c.hex === selected ? "checked" : ""}/><span aria-hidden="true"></span><small>${escapeHtml(c.name)}</small></label>`).join("")}</div>`;
+  const configured = providerSettings && (providerSettings.backend && providerSettings.backend !== "http" || providerSettings.baseUrl && providerSettings.model && (providerSettings.hasApiKey || providerSettings.noAuth));
+  box.innerHTML = `<div class="section-head settings-head"><div><h2>引擎档案 <span class="default-badge">多译本对照</span></h2><p>把常用的 API 或 CLI 各存一份，配一种颜色。阅读页“再译一版”可以直接选用档案，译本对照也用这里的名字和颜色区分。密钥仍按上方的方式加密保存在本机。</p></div></div>
+    <div class="profile-list">${state.profiles.map((p) => `<article class="profile-card${p.active ? " is-active" : ""}" style="--v:${p.color}" data-profile="${escapeAttribute(p.id)}">
+      <div class="profile-main"><i class="profile-dot" aria-hidden="true"></i><div class="profile-text"><strong>${escapeHtml(p.name)}</strong>${p.active ? '<span class="profile-badge">正在使用</span>' : ""}<small>${escapeHtml(engineSummary(p))}</small></div></div>
+      <div class="profile-actions"><button type="button" data-activate ${p.active ? "disabled" : ""}>${p.active ? "使用中" : "启用"}</button><button type="button" data-edit>改名 · 换色</button><button type="button" data-overwrite title="用上方已保存的引擎配置覆盖这份档案">更新为当前配置</button><button type="button" data-delete>删除</button></div>
+      <div class="profile-editor" hidden><label>名称<input maxlength="40" value="${escapeAttribute(p.name)}"/></label>${swatches(`color-${p.id}`, p.color)}<div class="dialog-actions"><button type="button" data-cancel>取消</button><button type="button" class="primary" data-save>保存</button></div></div>
+    </article>`).join("") || '<p class="profile-empty">还没有档案。先在上方配置好一个引擎并点“保存引擎配置”，再在下面起个名字存起来；换一个引擎，重复一次。</p>'}</div>
+    <form class="profile-new" id="profile-new" autocomplete="off"><h3>把当前引擎存为档案</h3>
+      <p class="profile-current">${configured ? `当前已保存：${escapeHtml(engineSummary(providerSettings))}` : "上方还没有保存可用的引擎配置。"}</p>
+      <label>名称<input id="profile-name" maxlength="40" placeholder="例如：阿青 Sonnet、DeepSeek、阿澈 Codex" required ${configured ? "" : "disabled"}/></label>
+      ${swatches("new-profile-color", nextColor)}
+      <div class="dialog-actions"><button class="primary" type="submit" ${configured ? "" : "disabled"}>存为档案</button></div></form>`;
+  const act = async (promise, message) => { try { await promise; if (message) notify(message); await renderProfiles(); } catch (error) { notify(error.message); } };
+  const json = (method, body) => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  box.querySelectorAll(".profile-card").forEach((card) => {
+    const id = card.dataset.profile; const profile = state.profiles.find((p) => p.id === id); const editor = card.querySelector(".profile-editor");
+    card.querySelector("[data-activate]").onclick = async () => { try { providerSettings = await request(`/api/engine-profiles/${id}/activate`, { method: "POST" }); notify(`已启用：${profile.name}`); renderSettings(); } catch (error) { notify(error.message); } };
+    card.querySelector("[data-edit]").onclick = () => { editor.hidden = !editor.hidden; if (!editor.hidden) editor.querySelector("input").focus(); };
+    card.querySelector("[data-cancel]").onclick = () => { editor.hidden = true; };
+    card.querySelector("[data-save]").onclick = () => act(request(`/api/engine-profiles/${id}`, json("PATCH", { name: editor.querySelector("input").value, color: editor.querySelector("input[type=radio]:checked")?.value })), "档案已更新");
+    card.querySelector("[data-overwrite]").onclick = () => { if (confirm(`用上方当前保存的引擎（${engineSummary(providerSettings || {})}）覆盖“${profile.name}”？名称和颜色保持不变。`)) act(request("/api/engine-profiles", json("POST", { id, name: profile.name, color: profile.color })), "档案已更新为当前配置"); };
+    card.querySelector("[data-delete]").onclick = () => { if (confirm(`删除档案“${profile.name}”？已经翻好的译本不受影响，仍保留原来的名字和颜色。`)) act(request(`/api/engine-profiles/${id}`, { method: "DELETE" }), "档案已删除"); };
+  });
+  box.querySelector("#profile-new").onsubmit = (event) => { event.preventDefault(); act(request("/api/engine-profiles", json("POST", { name: box.querySelector("#profile-name").value, color: box.querySelector("input[name='new-profile-color']:checked")?.value })), "已存为引擎档案"); };
 }
 
 async function saveSearchSettings(event) {

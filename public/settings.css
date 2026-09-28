@@ -83,3 +83,31 @@
 }
 
 .storage-panel { order: 3; }
+
+/* Engine profiles: each saved engine wears the colour used for its translations in the reader. */
+.profiles-panel h3 { margin: 0 0 6px; font-size: 15px; }
+.profile-list { display: grid; gap: 10px; margin: 16px 0 20px; }
+.profile-empty { color: var(--muted); font-size: 13px; line-height: 1.7; }
+.profile-card { display: grid; gap: 10px; padding: 12px 14px 12px 16px; border: 1px solid color-mix(in srgb, var(--v) 22%, var(--line)); border-left: 4px solid var(--v); border-radius: 4px 8px 8px 4px; background: color-mix(in srgb, var(--v) 3%, var(--paper)); }
+.profile-card.is-active { background: color-mix(in srgb, var(--v) 8%, var(--paper)); border-color: color-mix(in srgb, var(--v) 45%, var(--line)); }
+.profile-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.profile-dot { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--v); box-shadow: 0 0 0 4px color-mix(in srgb, var(--v) 16%, transparent); }
+.profile-text { min-width: 0; }
+.profile-text strong { font-size: 15px; color: color-mix(in srgb, var(--v) 70%, var(--ink)); }
+.profile-text small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.profile-badge { display: inline-flex; margin-left: 8px; padding: 1px 8px; vertical-align: 2px; border-radius: 999px; font-size: 11px; color: var(--paper); background: var(--v); }
+.profile-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.profile-actions button { min-height: 34px; padding: 4px 12px; font-size: 12.5px; }
+.profile-editor { display: grid; gap: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+.profile-editor label, .profile-new label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.profile-new { padding-top: 16px; border-top: 1px solid var(--line); }
+.profile-current { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.swatch { position: relative; display: grid; justify-items: center; gap: 4px; cursor: pointer; font-size: 11px; color: var(--muted); }
+.swatch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.swatch span { width: 28px; height: 28px; border-radius: 50%; background: var(--v); box-shadow: inset 0 0 0 2px color-mix(in srgb, #fff 25%, transparent); transition: transform .15s ease, box-shadow .15s ease; }
+.swatch:hover span { transform: scale(1.08); }
+.swatch input:checked + span { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px var(--v); }
+.swatch input:checked ~ small { color: var(--ink); font-weight: 600; }
+.swatch input:focus-visible + span { outline: 3px solid var(--rust); outline-offset: 3px; }
+[data-workbench-theme="lamplight"] .profile-text strong { color: color-mix(in srgb, var(--v) 55%, #fff); }
