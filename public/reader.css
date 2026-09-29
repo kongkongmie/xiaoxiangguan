@@ -321,3 +321,10 @@
 .align-pop small { display: block; margin-top: 4px; color: var(--reader-muted); font-size: 11.5px; }
 .align-close { position: absolute; top: 6px; right: 6px; min-height: 28px !important; width: 28px; padding: 0; border: 0; background: transparent; color: var(--reader-muted); font-size: 18px; line-height: 1; }
 .align-close:hover { color: var(--reader-ink); transform: none; }
+
+/* ---- Illustrations from the book, shown in place of "[图片]" on both sides ---------------------------------------- */
+.reading-scroll p.paragraph-figure { display: flex; justify-content: center; padding-block: 6px; }
+.reading-scroll p.paragraph-figure .paragraph-number { align-self: flex-start; }
+.reader-figure { display: block; max-width: 100%; max-height: min(78vh, 900px); width: auto; height: auto; margin: 0 auto; border-radius: 3px; box-shadow: 0 6px 24px rgb(20 24 30 / .14); background: color-mix(in srgb, var(--reader-ink) 4%, var(--reader-paper)); }
+.compare-figure { margin: 0 0 6px; }
+.compare-figure .reader-figure { max-height: 320px; margin: 0; }

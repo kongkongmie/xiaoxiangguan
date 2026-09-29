@@ -7,7 +7,7 @@ const shortTime = (iso) => { const d = new Date(iso); return Number.isNaN(d.getT
 const profileSummary = (p) => [p.backend === "http" ? p.providerName || p.host : BACKENDS[p.backend] || p.backend, p.model || "默认模型", p.reasoningEffort].filter(Boolean).join(" · ");
 const PENDING_TTL = 10 * 60 * 1000;
 
-export function createCompare({ room, strip, view, bar, read, book, request, notify, translate, configure, isEditing, onComposed, sourceLang }) {
+export function createCompare({ figure = () => null, room, strip, view, bar, read, book, request, notify, translate, configure, isEditing, onComposed, sourceLang }) {
   let chapter = null, versions = [], partials = [], units = [], profiles = [], profilesLoaded = false;
   let compareOn = false, viewingId = null, picks = {}, custom = {}, draftLoadedFor = null, draftTimer = null;
   let stripSig = "", viewSig = "", dialogUnitKey = null, toolParagraphId = null;
@@ -101,13 +101,13 @@ export function createCompare({ room, strip, view, bar, read, book, request, not
   function renderView() {
     if (!compareOn) { view.hidden = true; read.hidden = false; viewSig = ""; return; }
     view.hidden = false; read.hidden = true;
-    const sig = JSON.stringify([all().map((v) => [v.id, v.color, v.label]), units.map((u) => [u.key, Object.keys(u.texts).length])]);
+    const sig = JSON.stringify([all().map((v) => [v.id, v.color, v.label]), units.map((u) => [u.key, Object.keys(u.texts).length, u.ids.some((id) => figure(id))])]);
     if (sig !== viewSig && !view.contains(document.activeElement?.closest?.("textarea"))) {
       viewSig = sig;
       view.innerHTML = units.map((unit) => {
         const groups = variantGroups(unit);
         return `<section class="compare-row" data-ids="${esc(unit.key)}" data-unit="${esc(unit.key)}">
-          <div class="compare-original" lang="${esc(sourceLang)}"><span class="compare-no" aria-label="${esc(unitRange(unit))}">${unitNumber(unit)}</span>${unit.ids.map((id) => `<p>${esc(sourceText(id))}</p>`).join("")}
+          <div class="compare-original" lang="${esc(sourceLang)}"><span class="compare-no" aria-label="${esc(unitRange(unit))}">${unitNumber(unit)}</span>${unit.ids.map((id) => { const art = figure(id); return art ? `<p class="compare-figure"><img class="reader-figure" src="${esc(art.url)}" alt="${esc(art.alt || "插图")}" loading="lazy"/></p>` : `<p>${esc(sourceText(id))}</p>`; }).join("")}
             <div class="compare-tools" lang="zh-CN"><button class="compare-link" data-toggle-custom>✎ 改写</button><button class="compare-link" data-open-paragraph>⇄ 现译这一段</button><span class="compare-state"></span></div></div>
           <div class="compare-variants" role="radiogroup" aria-label="${esc(unitRange(unit))}的译本">
             ${groups.map((g) => { const names = g.versions.map((v) => v.label).join("、"); return `<div class="compare-variant${g.versions.length > 1 ? " is-shared" : ""}" role="radio" tabindex="0" aria-checked="false" title="${esc(names)}${g.versions.length > 1 ? " · 译文相同" : ""}" aria-label="${esc(names)}" style="--v:${g.versions[0].color};${g.versions.length > 1 ? `--stripe:${stripe(g.versions)}` : ""}" data-pick="${esc(g.versions[0].id)}" data-group="${esc(g.versions.map((v) => v.id).join(" "))}">

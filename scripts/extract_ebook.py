@@ -152,10 +152,62 @@ def extract_epub(source,output,converted_from=None):
         (output/"manifest.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
         return result
 
+class ImageFinder(HTMLParser):
+    """Images in reading order: <img src>, and SVG <image href/xlink:href> used for full-page illustrations."""
+    def __init__(self): super().__init__(convert_charrefs=True); self.found=[]
+    def handle_starttag(self, tag, attrs):
+        tag=tag.lower().rsplit(":",1)[-1]; a={k.lower():v for k,v in attrs}
+        if tag=="img" and a.get("src"): self.found.append((a["src"],a.get("alt") or ""))
+        elif tag=="image":
+            ref=a.get("xlink:href") or a.get("href")
+            if ref: self.found.append((ref,""))
+    handle_startendtag=handle_starttag
+
+IMAGE_TYPES={".jpg",".jpeg",".png",".gif",".webp",".svg",".bmp",".avif"}
+def extract_images(source,output):
+    """Copy the illustrations of an EPUB into output/files and write output/index.json keyed by chapter href."""
+    output.mkdir(parents=True,exist_ok=True); files=output/"files"
+    try: archive=zipfile.ZipFile(source)
+    except Exception as exc: raise EbookError("文件不是可读取的 EPUB。") from exc
+    with archive:
+        names=set(archive.namelist())
+        container=xml_member(archive,"META-INF/container.xml")
+        rootfile=next((x.attrib.get("full-path","") for x in container.iter() if local(x.tag)=="rootfile"),"")
+        opf=xml_member(archive,rootfile); opf_dir=posixpath.dirname(rootfile)
+        manifest={}
+        for x in opf.iter():
+            if local(x.tag)=="item" and x.attrib.get("id"): manifest[x.attrib["id"]]={"href":x.attrib.get("href",""),"type":x.attrib.get("media-type",""),"properties":x.attrib.get("properties","")}
+        def copy(member):
+            if member not in names or Path(member).suffix.lower() not in IMAGE_TYPES: return None
+            target=(files/member).resolve()
+            if files.resolve() not in target.parents: return None
+            if not target.exists(): target.parent.mkdir(parents=True,exist_ok=True); target.write_bytes(archive.read(member))
+            return member
+        chapters={}
+        for item in manifest.values():
+            if item["type"] not in {"application/xhtml+xml","text/html"}: continue
+            href=unquote(item["href"].split("#",1)[0]); member=posixpath.normpath(posixpath.join(opf_dir,href))
+            if member not in names: continue
+            finder=ImageFinder(); finder.feed(text_member(archive,member))
+            images=[]
+            for ref,alt in finder.found:
+                if re.match(r"^[a-z]+:",ref,re.I): continue
+                path=copy(posixpath.normpath(posixpath.join(posixpath.dirname(member),unquote(ref.split("#",1)[0]))))
+                if path: images.append({"path":path,"alt":alt})
+            if images: chapters[href]=images
+        cover_id=next((x.attrib.get("content") for x in opf.iter() if local(x.tag)=="meta" and x.attrib.get("name")=="cover"),None)
+        cover_item=manifest.get(cover_id) or next((i for i in manifest.values() if "cover-image" in i["properties"].split()),None)
+        cover=copy(posixpath.normpath(posixpath.join(opf_dir,unquote(cover_item["href"])))) if cover_item else None
+    result={"version":1,"chapters":chapters,"cover":cover}
+    (output/"index.json").write_text(json.dumps(result,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+    return result
+
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("source"); p.add_argument("--output"); p.add_argument("--ebook-convert"); p.add_argument("--enrich-manifest"); a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("source"); p.add_argument("--output"); p.add_argument("--ebook-convert"); p.add_argument("--enrich-manifest"); p.add_argument("--images"); a=p.parse_args()
     source=Path(a.source).resolve(); output=Path(a.output).resolve() if a.output else None
     try:
+        if a.images:
+            result=extract_images(source,Path(a.images).resolve()); print(json.dumps({"chapters":len(result["chapters"]),"cover":bool(result["cover"])},ensure_ascii=False)); return
         if a.enrich_manifest:
             result=enrich_manifest(source,Path(a.enrich_manifest).resolve()); print(json.dumps({"manifest":a.enrich_manifest,"toc_entries":len(result.get("toc",[]))},ensure_ascii=False)); return
         if not a.output: raise EbookError("必须指定输出目录。")

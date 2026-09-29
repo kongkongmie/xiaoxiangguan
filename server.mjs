@@ -11,7 +11,8 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs
 import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEpub } from "./lib/epub.mjs";
-import { analyzeChapterEntities, checkControl, waitControl, extractDocument, identifyHighRisk, japaneseOcrPath, ocrStatus, readChapterText, testProviderConnection, alignSelection, translateChapter, writeTranslation } from "./lib/engine.mjs";
+import { isIllustrationText } from "./public/illustrations.js";
+import { analyzeChapterEntities, checkControl, waitControl, extractDocument, identifyHighRisk, japaneseOcrPath, ocrStatus, readChapterText, testProviderConnection, alignSelection, bookImages, bookImagesDir, translateChapter, writeTranslation } from "./lib/engine.mjs";
 import { SOURCE_LANGUAGES, sourceLanguage } from "./public/languages.js";
 import { searchResearchSources, verifyIssue } from "./lib/research.mjs";
 import { createSearchBudget } from "./lib/search-budget.mjs";
@@ -776,6 +777,27 @@ async function api(req, res, url) {
     chapter.revisionHistory.push({ id: chapter.revisionId, path: selected.path, segments: selected.segments || null, ...(selected.engine ? { engine: selected.engine } : {}), ...(selected.segmentSources ? { segmentSources: selected.segmentSources } : {}), origin: "reader", createdAt: chapter.updatedAt, reason: `读者恢复版本 ${selected.id}` });
     await saveLibrary(data); await syncProjectState(book); return json(res, 200, chapter);
   });
+  // Illustrations: which images a chapter has, and the image files themselves (only ones listed in the index).
+  const imagesMatch = url.pathname.match(/^\/api\/books\/([^/]+)\/(chapters\/([^/]+)\/images|images\/file)$/);
+  if (imagesMatch && req.method === "GET") {
+    const data = await readLibrary(); const book = data.books.find((b) => b.id === imagesMatch[1]); if (!book) return json(res, 404, { error: "作品不存在" });
+    const index = await bookImages({ book, bookRoot: bookRoot(book) });
+    const fileUrl = (path) => `/api/books/${encodeURIComponent(book.id)}/images/file?path=${encodeURIComponent(path)}`;
+    if (imagesMatch[3]) {
+      const chapter = book.chapters.find((c) => c.id === imagesMatch[3]); if (!chapter) return json(res, 404, { error: "章节不存在" });
+      const href = String(chapter.sourceHref || "").replace(/\\/g, "/");
+      return json(res, 200, { images: (index.chapters?.[href] || []).map((image) => ({ url: fileUrl(image.path), alt: image.alt || "" })), cover: index.cover ? fileUrl(index.cover) : null });
+    }
+    const wanted = url.searchParams.get("path") || "";
+    const known = new Set([index.cover, ...Object.values(index.chapters || {}).flat().map((i) => i.path)].filter(Boolean));
+    if (!known.has(wanted)) return json(res, 404, { error: "图片不存在" });
+    const file = join(bookImagesDir(bookRoot(book)), "files", ...wanted.split("/"));
+    const types = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".avif": "image/avif" };
+    if (!existsSync(file)) return json(res, 404, { error: "图片不存在" });
+    // Book content is untrusted: never let an SVG run script if opened directly.
+    res.writeHead(200, { "content-type": types[extname(file).toLowerCase()] || "application/octet-stream", "cache-control": "private, max-age=86400", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox" });
+    return createReadStream(file).pipe(res);
+  }
   const alignMatch = url.pathname.match(/^\/api\/books\/([^/]+)\/chapters\/([^/]+)\/align$/);
   if (alignMatch && req.method === "POST") {
     const body = await readJson(req); const data = await readLibrary(); const book = data.books.find((b) => b.id === alignMatch[1]);
@@ -958,10 +980,32 @@ async function api(req, res, url) {
         hydrated.push({ ...segment, id: segment.id, title: `${chapter.title} · ${segment.label}`, translation, status: "approved" });
       }
     } else for (const chapter of book.chapters) if (!body.chapterIds?.length || body.chapterIds.includes(chapter.id)) hydrated.push({ ...chapter, source: await readChapterText(bookRoot(book), chapter, "source"), translation: await readChapterText(bookRoot(book), chapter, "current") });
+    // Illustrations from the original EPUB: placeholders become images, and picture-only pages within the
+    // exported range come along even though nobody translates them.
+    let pictures = null;
+    if (!body.selectionOnly && ["EPUB", "AZW3"].includes(String(book.format).toUpperCase())) {
+      const index = await bookImages({ book, bookRoot: bookRoot(book) }).catch(() => null);
+      if (index && (Object.keys(index.chapters || {}).length || index.cover)) {
+        const imagesOf = (c) => index.chapters?.[String(c.sourceHref || "").replace(/\\/g, "/")] || [];
+        const order = book.chapters.map((c) => c.id);
+        const kept = hydrated.filter((c) => c.status === "approved" || (body.includeDraft && c.translation?.trim())).map((c) => order.indexOf(c.id)).filter((i) => i >= 0);
+        if (kept.length) {
+          const lo = body.chapterIds?.length ? Math.min(...kept) : 0, hi = body.chapterIds?.length ? Math.max(...kept) : order.length - 1;
+          for (let i = lo; i <= hi; i++) {
+            const chapter = book.chapters[i]; if (!imagesOf(chapter).length || kept.includes(i)) continue;
+            const source = await readChapterText(bookRoot(book), chapter, "source"); if (!isIllustrationText(source)) continue;
+            const entry = { ...chapter, source, translation: source, status: "approved", illustration: true };
+            const at = hydrated.findIndex((h) => h.id === chapter.id); if (at >= 0) hydrated[at] = entry; else hydrated.push(entry);
+          }
+          hydrated.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        }
+        pictures = { dir: join(bookImagesDir(bookRoot(book)), "files"), cover: index.cover, chapter: imagesOf };
+      }
+    }
     const selectionSuffix = body.selectionOnly ? "selections" : body.chapterIds?.length ? "selected" : (body.includeDraft ? "draft" : "approved");
     const exportId = `export-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
     const filename = `xiaoxiangguan-${selectionSuffix}-${exportId}.epub`; const outputPath = join(EXPORTS, filename);
-    const result = await createEpub({ book, chapters: hydrated, outputPath, includeDraft: Boolean(body.includeDraft) });
+    const result = await createEpub({ book, chapters: hydrated, outputPath, includeDraft: Boolean(body.includeDraft), pictures });
     const included = new Set(result.chapterIds);
     if (!body.selectionOnly) for (const chapter of book.chapters) if (included.has(chapter.id)) chapter.exportedAt = new Date().toISOString();
     data.exports.unshift({ id: exportId, bookId: book.id, bookTitle: book.title, filename, chapterCount: result.chapterCount, createdAt: new Date().toISOString(), includesDraft: Boolean(body.includeDraft) }); await saveLibrary(data);

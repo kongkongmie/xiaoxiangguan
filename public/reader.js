@@ -3,6 +3,7 @@ import { sourceLanguage } from "./languages.js";
 import { statusIcon, statusBadge } from "./status-badge.js";
 import { createCompare } from "./reader-compare.js";
 import { createAlign } from "./reader-align.js";
+import { IMAGE_PARAGRAPH } from "./illustrations.js";
 
 export function readingState(bookId) {
   try { return JSON.parse(localStorage.getItem(`reader:${bookId}`) || "{}"); } catch { return {}; }
@@ -13,6 +14,8 @@ export function rememberReading(bookId, patch) {
   return value;
 }
 const escape = (text = "") => String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+
+const figureMarkup = (figures) => figures.map((f) => `<img class="reader-figure" src="${escape(f.url)}" alt="${escape(f.alt || "插图")}" loading="lazy" decoding="async"/>`).join("");
 
 export function readerSourceParagraphs(chapter) {
   if (Array.isArray(chapter.sourceParagraphs) && chapter.sourceParagraphs.length) return chapter.sourceParagraphs;
@@ -76,7 +79,10 @@ export function mountReader({ container, book, chapter, request, notify, navigat
   </section>`;
   const $ = (selector) => container.querySelector(selector);
   const room = $(".reading-room"), sourcePane = $("#source-scroll"), translatedPane = $("#translation-scroll"), read = $("#translation-read"), editor = $("#translation");
-  const compare = createCompare({ room, strip: $("#version-strip"), view: $("#compare-view"), bar: $("#compose-bar"), read, book, request, notify, configure, isEditing: () => editing, sourceLang,
+  // Illustrations: paragraph id -> image, filled in once the chapter's images are known.
+  const figures = new Map();
+  const figuresFor = (ids) => ids.length && ids.every((id) => figures.has(id)) ? ids.map((id) => figures.get(id)) : null;
+  const compare = createCompare({ figure: (id) => figures.get(id) || null, room, strip: $("#version-strip"), view: $("#compare-view"), bar: $("#compose-bar"), read, book, request, notify, configure, isEditing: () => editing, sourceLang,
     translate: (profileId, range) => startTranslation("draft", range, false, profileId),
     onComposed: async () => { try { update(await request(`/api/books/${book.id}/chapters/${chapter.id}`)); } catch (e) { notify(e.message); } } });
   compare.onViewChange = () => { const anchor = capture(translatedPane); update(current); if (anchor) locate(translatedPane, anchor); };
@@ -165,6 +171,20 @@ export function mountReader({ container, book, chapter, request, notify, navigat
     });
   }
   const align = createAlign({ room, sourcePane, translatedPane, read, findNode, idsOf, request, book, chapter, notify, isActive: () => !editing && !compare.isComparing() && current.alignmentStatus !== "legacy" });
+  // Fetch the chapter's illustrations and put them where extraction left "[图片]" placeholders, on both sides.
+  (async () => {
+    if (!["EPUB", "AZW3"].includes(String(book.format || "").toUpperCase()) || legacyServer) return;
+    let found; try { found = await request(`/api/books/${book.id}/chapters/${chapter.id}/images`); } catch { return; }
+    if (disposed || !found?.images?.length) return;
+    const holders = visibleSource.filter((p) => p.id && IMAGE_PARAGRAPH.test(String(p.text).trim()));
+    holders.forEach((p, i) => { const image = found.images[i]; if (image) figures.set(p.id, image); });
+    for (const [id, image] of figures) {
+      const node = sourcePane.querySelector(`p[data-ids="${CSS.escape(id)}"]`); if (!node) continue;
+      const number = node.querySelector(".paragraph-number");
+      node.innerHTML = figureMarkup([image]); if (number) node.prepend(number); node.classList.add("paragraph-figure");
+    }
+    if (figures.size && !editing) update(current);
+  })();
   const selectionChanged = () => { if (!getSelection().isCollapsed && container.contains(getSelection().anchorNode)) stopFollow(); else if (deferred && !editing) { const next = deferred; deferred = null; update(next); } };
   document.addEventListener("selectionchange", selectionChanged);
   const openDialog = (id) => { stopFollow(); $(id).showModal(); };
@@ -231,7 +251,10 @@ export function mountReader({ container, book, chapter, request, notify, navigat
     for (const segment of segments) {
       const key = segment.sourceParagraphIds.join(" ") || "legacy"; let node = old.get(key);
       if (!node) { node = document.createElement("p"); node.dataset.key = key; node.tabIndex = 0; if (key !== "legacy") node.dataset.ids = key; }
-      old.delete(key); if (node.textContent !== segment.text) { node.textContent = segment.text; changed = true; }
+      old.delete(key);
+      const art = figuresFor(segment.sourceParagraphIds);
+      if (art) { const sig = art.map((f) => f.url).join(" "); if (node.dataset.figure !== sig) { node.innerHTML = figureMarkup(art); node.dataset.figure = sig; node.classList.add("paragraph-figure"); changed = true; } }
+      else if (node.textContent !== segment.text || node.dataset.figure) { node.textContent = segment.text; delete node.dataset.figure; node.classList.remove("paragraph-figure"); changed = true; }
       if (node.classList.contains("paragraph-pending") !== Boolean(segment.pending)) changed = true;
       node.classList.toggle("paragraph-pending", Boolean(segment.pending));
       if (node.previousElementSibling !== previous || node.parentNode !== read) { read.insertBefore(node, previous ? previous.nextSibling : read.firstChild); changed = true; }
