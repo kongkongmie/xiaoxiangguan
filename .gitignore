@@ -14,3 +14,5 @@ node_modules/
 # Local audit artifacts, browser captures, caches and session handoff.
 /output/
 /HANDOFF.md
+scripts/ui/shots/
+scripts/ui/node_modules/

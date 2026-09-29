@@ -1,0 +1,7 @@
+{
+  "name": "xiaoxiangguan-ui-scenarios",
+  "private": true,
+  "type": "module",
+  "description": "浏览器界面场景测试（可选，不在 npm test 里）。先在本目录运行 npm install。",
+  "devDependencies": { "playwright": "1.63.0" }
+}

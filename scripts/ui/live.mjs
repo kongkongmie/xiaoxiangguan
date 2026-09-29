@@ -1,0 +1,31 @@
+import { chromium } from "playwright";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { boot } from "./fixture.mjs";
+const out = (await import("./paths.mjs")).shots;
+const app = await boot();
+const fail = (m) => { throw new Error(m); };
+try {
+  const port = new URL((await app.call("GET", "/api/provider")).baseUrl).port;
+  await writeFile(join(app.folder, "secrets/provider.json"), JSON.stringify({ backend: "http", protocol: "openai-chat", providerName: "DeepSeek（慢）", baseUrl: `http://127.0.0.1:${port}/v1`, model: "slow", noAuth: true }));
+  const browser = await chromium.launch({ ...(await import("./paths.mjs")).launch });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const errors = []; page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(app.base);
+  const task = await app.call("POST", "/api/books/neko/chapters/c1/translate", { mode: "draft" });
+  await page.click("[data-view=tasks]");
+  await page.waitForSelector('.task-live[data-phase="thinking"]', { timeout: 15000 });
+  const thinking = await page.locator('[data-live-pane="reasoning"]').innerText();
+  if (!thinking.includes("吾輩")) fail("reasoning not shown: " + thinking);
+  await page.screenshot({ path: `${out}70-live-thinking.png` });
+  await page.waitForSelector('.task-live[data-phase="writing"]', { timeout: 15000 }); await page.waitForTimeout(2500);
+  const text = await page.locator('[data-live-pane="text"]').innerText();
+  if (!text.includes("我是猫") || text.includes('"sourceParagraphIds"')) fail("readable text: " + text.slice(0, 200));
+  await page.screenshot({ path: `${out}71-live-writing.png` });
+  const live = await app.call("GET", `/api/tasks/${task.id}/live`);
+  if (!live.reasoningChars || !live.log.some((l) => /开始第 1\/1 块/.test(l.note)) || !live.log.some((l) => /服务已响应 HTTP 200/.test(l.note))) fail("live api: " + JSON.stringify(live).slice(0, 400));
+  const done = (await app.idle()).find((t) => t.id === task.id); if (done.status !== "completed") fail("task " + done.status + " " + done.error);
+  await page.waitForTimeout(2000); await page.click("[data-view=library]"); await page.click("[data-view=tasks]"); await page.waitForTimeout(800);
+  if (!(await page.locator(".task-live summary", { hasText: "最后的输出" }).count())) fail("finished task should keep its last output");
+  console.log("errors:", JSON.stringify(errors)); await browser.close();
+} finally { app.stop(); }

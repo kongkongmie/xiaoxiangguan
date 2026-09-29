@@ -336,3 +336,23 @@ button:disabled { color: var(--muted); }
 .book-hero > div:nth-child(2) { min-width: 240px; }
 .book-hero .hero-actions { max-width: 440px; }
 @media (max-width: 760px) { .book-hero > div:nth-child(2) { min-width: 0; } .book-hero .hero-actions { max-width: none; } }
+
+/* Live output of a running translation */
+.task-live { margin: 8px 0 4px; padding: 8px 12px 10px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--ink) 2.5%, var(--paper)); }
+.task-live-empty { color: var(--muted); font-size: 12.5px; }
+.task-live summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; }
+.task-live .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.task-live[data-phase="waiting"] .live-dot { background: #b7801f; animation: live-pulse 1.4s ease-in-out infinite; }
+.task-live[data-phase="thinking"] .live-dot { background: #7a5ba6; animation: live-pulse 1.4s ease-in-out infinite; }
+.task-live[data-phase="writing"] .live-dot { background: #4e8a6a; animation: live-pulse 1s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .task-live .live-dot { animation: none !important; } }
+.live-quiet { margin-left: 6px; padding: 0 8px; border-radius: 999px; color: #b5485d; border: 1px solid color-mix(in srgb, #b5485d 45%, transparent); font-size: 12px; }
+.live-stats { margin: 6px 0 8px; color: var(--muted); font-size: 12px; }
+.live-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.live-cols h4 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.live-cols pre { margin: 0; height: 180px; overflow: auto; padding: 8px 10px; border-radius: 6px; background: var(--paper); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; font: 12.5px/1.7 "Microsoft YaHei UI", "PingFang SC", sans-serif; }
+.live-cols section:first-child pre { color: color-mix(in srgb, var(--ink) 70%, var(--paper)); }
+.live-log { margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); display: grid; gap: 2px; }
+.live-log time { display: inline-block; min-width: 64px; font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .live-cols { grid-template-columns: 1fr; } .live-cols pre { height: 140px; } }

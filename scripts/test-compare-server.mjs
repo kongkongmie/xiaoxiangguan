@@ -126,7 +126,7 @@ try {
   const prompts = await call("GET", "/api/prompts");
   assert.equal(prompts.defaultId, "builtin"); assert.ok(prompts.variables.some((v) => v.name === "原文段落" && v.required));
   await assert.rejects(call("PUT", "/api/prompts", { sets: [{ id: "p-bad", name: "坏的", user: "请翻译" }] }), /原文段落/);
-  const literary = { id: "p-literary", name: "出版译本", system: "你是出版社的文学译者。{{风格要求}}", user: "{{作品}}·{{章节}}\n{{原文段落}}", closing: "请按已出版译本的标准完整译出。", closingMode: "separate" };
+  const literary = { id: "p-literary", name: "出版译本", system: "你是出版社的文学译者。{{风格要求}}", user: "{{作品}}·{{章节}}\n{{源语言}}原文段落：\n{{原文段落}}", closing: "请按已出版译本的标准完整译出。", closingMode: "separate" };
   const promptState = await call("PUT", "/api/prompts", { sets: [literary], defaultId: "builtin", bindings: { [b.id]: "p-literary", "no-such-profile": "p-literary" } });
   assert.deepEqual(promptState.bindings, { [b.id]: "p-literary" }, "bindings to unknown profiles are dropped");
   const preview = await call("POST", "/api/prompts/preview", { set: literary, bookId: "book", chapterId: "c1", mode: "draft" });
@@ -135,7 +135,12 @@ try {
   const boundTask = await call("POST", "/api/books/book/chapters/c1/translate", { mode: "draft", profileId: b.id }); const bound = (await idle()).find((t) => t.id === boundTask.id);
   const sentB = received.find((r) => r.model === "model-b"); assert.ok(sentB, "engine B was called");
   assert.match(sentB.messages[0].content, /^你是出版社的文学译者。/); assert.equal(sentB.messages.at(-1).content, "请按已出版译本的标准完整译出。");
-  assert.equal(bound.engine.promptSetName, "出版译本");
+  assert.equal(bound.engine.promptSetName, "出版译本"); assert.equal(bound.status, "completed", bound.error);
+  // The live view keeps what happened to the last block, in memory, after the task ends.
+  const live = await call("GET", `/api/tasks/${boundTask.id}/live`);
+  assert.equal(live.phase, "done"); assert.equal(live.outcome, "completed"); assert.ok(live.textChars > 0);
+  assert.ok(live.log.some((l) => /开始第 1\/1 块/.test(l.note)) && live.log.some((l) => /块完成/.test(l.note)), JSON.stringify(live.log));
+  assert.equal((await call("GET", "/api/tasks/no-such-task/live")).phase, "none");
   received.length = 0;
   const plainTask = await call("POST", "/api/books/book/chapters/c1/translate", { mode: "draft", profileId: a.id }); const plain = (await idle()).find((t) => t.id === plainTask.id);
   const sentA = received.find((r) => r.model === "model-a"); assert.match(sentA.messages[0].content, /^你是严谨的/, "engine A keeps the built-in prompt");

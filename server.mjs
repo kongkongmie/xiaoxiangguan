@@ -360,6 +360,30 @@ async function syncProjectMetadata(book) {
   await writeFile(path, `${JSON.stringify(project, null, 2)}\n`, "utf8");
 }
 const taskControls = new Map();
+// Live view of a running translation: what the model has thought and written for the current block, kept in
+// memory only (never in the library), trimmed to the latest part, and dropped a while after the task ends.
+const liveOutput = new Map();
+const LIVE_KEEP = { reasoning: 6000, text: 8000, log: 40 };
+function recordLive(taskId, update) {
+  const now = Date.now();
+  let live = liveOutput.get(taskId);
+  if (!live) { live = { taskId, startedAt: now, block: 0, blocks: 0, attempt: 1, phase: "waiting", blockStartedAt: now, firstByteAt: null, lastAt: now, reasoning: "", text: "", reasoningChars: 0, textChars: 0, events: 0, log: [] }; liveOutput.set(taskId, live); }
+  live.lastAt = now;
+  const note = (text) => { live.log.push({ at: new Date(now).toISOString(), note: text }); if (live.log.length > LIVE_KEEP.log) live.log.splice(0, live.log.length - LIVE_KEEP.log); };
+  if (update.type === "block") {
+    Object.assign(live, { block: update.block, blocks: update.blocks, attempt: update.attempt, model: update.model, phase: "waiting", blockStartedAt: now, firstByteAt: null, reasoning: "", text: "", reasoningChars: 0, textChars: 0 });
+    note(`开始第 ${update.block}/${update.blocks} 块（${update.paragraphs} 段，${update.chars} 字）${update.attempt > 1 ? ` · 第 ${update.attempt} 次尝试` : ""}`);
+  } else if (update.type === "reasoning" || update.type === "text") {
+    const key = update.type; live.firstByteAt ||= now; live.phase = key === "text" ? "writing" : live.phase === "writing" ? "writing" : "thinking";
+    live[key] = (live[key] + update.text).slice(-LIVE_KEEP[key]); live[`${key}Chars`] += update.text.length;
+  } else if (update.type === "status") note(update.note);
+  else if (update.type === "event") live.events++;
+}
+function finishLive(taskId, outcome) {
+  const live = liveOutput.get(taskId); if (!live) return;
+  live.phase = "done"; live.outcome = outcome; live.lastAt = Date.now();
+  setTimeout(() => { if (liveOutput.get(taskId) === live) liveOutput.delete(taskId); }, 10 * 60 * 1000).unref?.();
+}
 let taskQueue = Promise.resolve();
 let stopping = false, shutdownPromise, shutdownDeadline;
 // All library read/modify/write transactions share one lock, including different books.
@@ -398,9 +422,10 @@ async function startTask(bookId, type, detail, runner, metadata = {}) {
     taskQueue = taskQueue.catch(() => {}).then(() => mutationContext.run(false, async () => {
       try {
         await waitControl(control); control.started = true; await updateTask(task.id, { status: "running", startedAt: new Date().toISOString() }); console.log(`任务开始：${type}`);
-        await runner(task, control); checkControl(control); await updateTask(task.id, { status: "completed", progress: 100, finishedAt: new Date().toISOString() }); console.log(`任务完成：${type}`);
+        await runner(task, control); checkControl(control); await updateTask(task.id, { status: "completed", progress: 100, finishedAt: new Date().toISOString() }); finishLive(task.id, "completed"); console.log(`任务完成：${type}`);
       } catch (error) {
         // Record what went wrong in full: message, code, and what the service or CLI actually returned.
+        finishLive(task.id, control.cancelled ? "cancelled" : "failed");
         await updateTask(task.id, { status: control.cancelled ? "cancelled" : "failed", error: error.message, errorCode: error.code, errorDetail: taskErrorDetail(error), finishedAt: new Date().toISOString(), detail: `${detail} · ${error.message}` });
         console.log(`任务${control.cancelled ? "已停止" : "未完成"}：${type}`);
       }
@@ -518,7 +543,7 @@ async function translateBookChapter(bookId, chapterId, mode, range, retry = fals
     });
     let result;
     try {
-      result = await translateChapter({ provider, book, chapter, source: selected.source, paragraphs, existingDraft, mode, previousTail: previousText.slice(-1200), glossary: book.glossary || [], characters: book.characters || [], promptSet, control, resumeBlocks: run.blocks,
+      result = await translateChapter({ provider, book, chapter, source: selected.source, paragraphs, existingDraft, mode, previousTail: previousText.slice(-1200), glossary: book.glossary || [], characters: book.characters || [], promptSet, onLive: (update) => recordLive(task.id, update), control, resumeBlocks: run.blocks,
         onProgress: (progress, detail) => updateTask(task.id, { progress, detail: `${chapter.title} · ${detail}` }),
         onBlock: (block) => withBookMutation(bookId, async () => {
           checkControl(control);
@@ -911,6 +936,8 @@ async function api(req, res, url) {
     if (book.scopes.length === before) return json(res, 404, { error: "选集不存在" });
     await saveLibrary(data); return json(res, 200, { ok: true });
   }
+  const liveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/live$/);
+  if (req.method === "GET" && liveMatch) { const live = liveOutput.get(liveMatch[1]); return json(res, 200, live ? { ...live, now: Date.now() } : { taskId: liveMatch[1], phase: "none", now: Date.now() }); }
   const taskMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/(pause|resume|cancel)$/);
   if (req.method === "POST" && taskMatch) {
     const control = taskControls.get(taskMatch[1]); if (!control) return json(res, 409, { error: "任务当前不在运行；应用重启后的任务请重新发起" });

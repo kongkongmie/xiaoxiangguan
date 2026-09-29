@@ -447,20 +447,69 @@ function taskDetails(task) {
     ${!task.error && !task.engine ? '<p class="task-empty-detail">这条任务没有记录引擎或错误信息（旧版本创建的任务不含这些字段）。</p>' : ""}
   </details>`;
 }
+// Live output of running translations: fetched with each task poll, cached so the list can re-render freely.
+const liveCache = new Map(), liveScroll = new Map(), liveClosed = new Set();
+async function refreshLive(tasks) {
+  const wanted = tasks.filter((t) => t.status === "running" || (["failed", "cancelled", "completed"].includes(t.status) && Date.now() - Date.parse(t.finishedAt || t.updatedAt || 0) < 10 * 60 * 1000 && liveCache.get(t.id)?.phase !== "done"));
+  await Promise.all(wanted.map((t) => request(`/api/tasks/${t.id}/live`).then((live) => liveCache.set(t.id, live)).catch(() => {})));
+}
+const clock = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, "0")} 秒`; };
+// The model writes JSON; show the translation inside it as it grows, even while a string is still unfinished.
+function readableOutput(raw) {
+  const out = []; const re = /"text"\s*:\s*"/g; let m;
+  while ((m = re.exec(raw))) {
+    let i = re.lastIndex, body = "";
+    for (; i < raw.length; i++) { if (raw[i] === "\\") { body += raw.slice(i, i + 2); i++; continue; } if (raw[i] === '"') break; body += raw[i]; }
+    try { out.push(JSON.parse(`"${body.replace(/\\$/, "")}"`)); } catch { out.push(body); }
+    re.lastIndex = i;
+  }
+  return out.length ? out.join("\n\n") : "";
+}
+function taskLive(task) {
+  const live = liveCache.get(task.id);
+  if (!live) return task.status === "running" ? `<div class="task-live task-live-empty">正在读取实时输出…</div>` : "";
+  if (live.phase === "none") return task.status === "running" ? `<div class="task-live task-live-empty">暂无实时数据：任务刚开始，或后台还是旧版本（重启后台即可）。</div>` : "";
+  const now = live.now || Date.now(), quiet = now - live.lastAt, running = task.status === "running";
+  const phase = !running ? { completed: "已完成", failed: "已失败", cancelled: "已取消" }[live.outcome || task.status] || "已结束"
+    : live.phase === "thinking" ? "思考中" : live.phase === "writing" ? "正在输出译文" : live.firstByteAt ? "等待中" : "等待首个字";
+  const readable = readableOutput(live.text);
+  const log = (live.log || []).slice(-6).reverse().map((l) => `<li><time>${escapeHtml(new Date(l.at).toLocaleTimeString("zh-CN", { hour12: false }))}</time>${escapeHtml(l.note)}</li>`).join("");
+  return `<details class="task-live" data-task-live="${escapeAttribute(task.id)}" data-phase="${escapeAttribute(running ? live.phase : "done")}" ${liveClosed.has(task.id) ? "" : "open"}>
+    <summary><i class="live-dot" aria-hidden="true"></i>${running ? "实时输出" : "最后的输出"} · <strong>${phase}</strong>${live.blocks ? ` · 第 ${live.block}/${live.blocks} 块` : ""}${running ? ` · 本块已 ${clock(now - live.blockStartedAt)}` : ""}${running && quiet > 45000 ? `<span class="live-quiet">已经 ${clock(quiet)} 没有收到任何数据</span>` : ""}</summary>
+    <p class="live-stats">${[live.model && `模型 ${escapeHtml(live.model)}`, live.attempt > 1 && `第 ${live.attempt} 次尝试`, live.firstByteAt ? `首字等了 ${clock(live.firstByteAt - live.blockStartedAt)}` : running ? `已等 ${clock(now - live.blockStartedAt)} 未收到内容` : "", `思考 ${Number(live.reasoningChars || 0).toLocaleString()} 字`, `输出 ${Number(live.textChars || 0).toLocaleString()} 字`, live.events ? `CLI 事件 ${live.events} 条` : ""].filter(Boolean).join(" · ")}</p>
+    <div class="live-cols">
+      <section><h4>思考过程</h4><pre data-live-pane="reasoning">${escapeHtml(live.reasoning || "（这个模型没有传回思考内容）")}</pre></section>
+      <section><h4>译文${readable ? "（从输出中提取）" : ""}</h4><pre data-live-pane="text">${escapeHtml(readable || live.text || "（还没有输出）")}</pre></section>
+    </div>
+    ${log ? `<ol class="live-log">${log}</ol>` : ""}
+  </details>`;
+}
+
 function renderTasks() {
   setHeader("本地队列", "任务中心");
   const rank = { queued: 0, running: 0, paused: 1, failed: 2, cancelled: 3, completed: 4 };
   const tasks = data.books.flatMap((book) => (book.tasks || []).map((task) => ({ ...task, bookTitle: book.title, bookId: book.id, demo: book.demo }))).sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
   const active = tasks.filter((task) => ["queued", "running", "paused"].includes(task.status)); const history = tasks.filter((task) => !["queued", "running", "paused"].includes(task.status));
-  const rows = (items, activeRows = false) => items.map((task) => `<div class="task-row ${activeRows ? "active-task" : ""}"><div><strong>${escapeHtml(task.type)}</strong><small class="subline">${escapeHtml(task.bookTitle)}</small></div><div class="task-main"><span>${escapeHtml(taskTitle(task))}</span>${taskEngineLine(task.engine)}${task.error ? `<small class="task-error">${escapeHtml(friendlyTaskError(task))}</small>` : ""}${taskDetails(task)}<div class="progress"><i style="width:${task.progress || 0}%"></i></div><small>${formatDate(task.updatedAt || task.createdAt)}</small></div><span>${status(task.status)}</span><div class="task-actions"><button data-task-open="${task.id}">打开成果</button>${["failed", "cancelled"].includes(task.status) && task.chapterId ? `<button data-task-retry="${task.id}">继续翻译</button>` : ""}${!task.demo && ["queued", "running"].includes(task.status) ? `<button data-task-action="pause" data-task="${task.id}">暂停</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : !task.demo && task.status === "paused" ? `<button data-task-action="resume" data-task="${task.id}">继续</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : `<button data-task-delete="${task.id}">删除</button>`}</div></div>`).join("");
+  const rows = (items, activeRows = false) => items.map((task) => `<div class="task-row ${activeRows ? "active-task" : ""}"><div><strong>${escapeHtml(task.type)}</strong><small class="subline">${escapeHtml(task.bookTitle)}</small></div><div class="task-main"><span>${escapeHtml(taskTitle(task))}</span>${taskEngineLine(task.engine)}${taskLive(task)}${task.error ? `<small class="task-error">${escapeHtml(friendlyTaskError(task))}</small>` : ""}${taskDetails(task)}<div class="progress"><i style="width:${task.progress || 0}%"></i></div><small>${formatDate(task.updatedAt || task.createdAt)}</small></div><span>${status(task.status)}</span><div class="task-actions"><button data-task-open="${task.id}">打开成果</button>${["failed", "cancelled"].includes(task.status) && task.chapterId ? `<button data-task-retry="${task.id}">继续翻译</button>` : ""}${!task.demo && ["queued", "running"].includes(task.status) ? `<button data-task-action="pause" data-task="${task.id}">暂停</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : !task.demo && task.status === "paused" ? `<button data-task-action="resume" data-task="${task.id}">继续</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : `<button data-task-delete="${task.id}">删除</button>`}</div></div>`).join("");
   content.innerHTML = `<div class="section-head"><div><p class="eyebrow">NOW / 当前状态</p><h2>正在运行</h2></div><span>${active.length} 个</span></div><div class="panel active-task-list">${rows(active, true) || '<div class="empty slim">当前没有运行中的任务。可以继续阅读或选择章节开始翻译。</div>'}</div><div class="section-head"><div><p class="eyebrow">HISTORY / 最近记录</p><h2>历史任务</h2></div>${history.length ? '<button id="clear-finished-tasks">清理全部历史</button>' : ""}</div><div class="panel">${rows(history) || '<div class="empty slim">暂无历史任务</div>'}</div>`;
   content.querySelectorAll("[data-task-details]").forEach((node) => node.addEventListener("toggle", () => { if (node.open) openTaskDetails.add(node.dataset.taskDetails); else openTaskDetails.delete(node.dataset.taskDetails); }));
+  // Live panes follow the newest text unless the reader scrolled up to look at something.
+  content.querySelectorAll("[data-task-live]").forEach((node) => {
+    node.addEventListener("toggle", () => { if (node.open) liveClosed.delete(node.dataset.taskLive); else liveClosed.add(node.dataset.taskLive); });
+    node.querySelectorAll("[data-live-pane]").forEach((pre) => {
+      const key = `${node.dataset.taskLive}:${pre.dataset.livePane}`, saved = liveScroll.get(key);
+      pre.scrollTop = !saved || saved.atBottom ? pre.scrollHeight : saved.top;
+      pre.addEventListener("scroll", () => liveScroll.set(key, { top: pre.scrollTop, atBottom: pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24 }), { passive: true });
+    });
+  });
   content.querySelectorAll("[data-task-action]").forEach((button) => button.onclick = () => taskAction(button.dataset.task, button.dataset.taskAction));
   content.querySelectorAll("[data-task-delete]").forEach((button) => button.onclick = () => deleteTask(button.dataset.taskDelete));
   content.querySelectorAll("[data-task-open]").forEach((button) => button.onclick = () => { const task = tasks.find((t) => t.id === button.dataset.taskOpen); task.chapterId ? renderWorkspace(task.bookId, task.chapterId) : renderBook(task.bookId); });
   content.querySelectorAll("[data-task-retry]").forEach((button) => button.onclick = async () => { const task = tasks.find((t) => t.id === button.dataset.taskRetry); const book = data.books.find((b) => b.id === task.bookId); await startTranslation(book, book.chapters.find((c) => c.id === task.chapterId), task.mode, task.range, true); renderWorkspace(book.id, task.chapterId); });
   const clearFinished = document.querySelector("#clear-finished-tasks"); if (clearFinished) clearFinished.onclick = clearFinishedTasks;
-  if (tasks.some((task) => !task.demo && ["queued", "running", "paused"].includes(task.status))) taskPollTimer = setTimeout(async () => { await load(); if (currentView === "tasks") renderTasks(); }, 1500);
+  const needLive = tasks.filter((t) => !t.demo && !liveCache.has(t.id) && (t.status === "running" || Date.now() - Date.parse(t.finishedAt || 0) < 10 * 60 * 1000));
+  if (needLive.length) refreshLive(needLive).then(() => { if (currentView === "tasks" && needLive.some((t) => liveCache.has(t.id))) renderTasks(); });
+  if (tasks.some((task) => !task.demo && ["queued", "running", "paused"].includes(task.status))) taskPollTimer = setTimeout(async () => { await load(); await refreshLive(data.books.flatMap((b) => b.tasks || [])); if (currentView === "tasks") renderTasks(); }, 1500);
 }
 
 async function taskAction(taskId, action) { try { await request(`/api/tasks/${taskId}/${action}`, { method: "POST" }); await load(); renderTasks(); } catch (error) { notify(error.message); } }
@@ -965,7 +1014,7 @@ function switchView(view) {
   if (taskPollTimer) { clearTimeout(taskPollTimer); taskPollTimer = null; }
   leaveReader(); route(`/${view}`); searchInput.disabled = view !== "library";
   currentView = view; document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
-  ({ library: renderLibrary, tasks: renderTasks, glossary: renderGlossary, uncertainties: renderGlossary, exports: renderExports, settings: renderSettings }[view] || renderLibrary)();
+  ({ library: renderLibrary, tasks: () => { renderTasks(); load().then(() => { if (currentView === "tasks") renderTasks(); }).catch(() => {}); }, glossary: renderGlossary, uncertainties: renderGlossary, exports: renderExports, settings: renderSettings }[view] || renderLibrary)();
 }
 
 async function importBook(event) {
