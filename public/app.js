@@ -128,6 +128,12 @@ function friendlyTaskError(task) {
   return line.length > 260 ? `${line.slice(0, 260)}…` : line;
 }
 
+// The server appends the error to the task summary; the red line below already shows it.
+function taskTitle(task) {
+  const text = String(task.detail || task.type || ""), suffix = task.error ? ` · ${task.error}` : "";
+  return suffix && text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
+}
+
 function setHeader(kicker, title) { eyebrow.textContent = kicker; pageTitle.textContent = title; }
 
 function renderLibrary() {
@@ -338,13 +344,51 @@ async function saveChapter(book, chapter, statusValue) {
   } catch (error) { notify(error.message); }
 }
 
+const openTaskDetails = new Set();
+const TASK_BACKENDS = { http: "翻译 API", codex: "Codex CLI", opencode: "OpenCode CLI", antigravity: "Antigravity CLI", claude: "Claude Code CLI" };
+function cleanUrl(value) { try { const u = new URL(value); return `${u.host}${u.pathname.replace(/\/$/, "")}`; } catch { return value || ""; } }
+function taskDuration(task) {
+  const start = Date.parse(task.startedAt || ""), end = Date.parse(task.finishedAt || "") || (task.status === "running" ? Date.now() : NaN);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
+  const s = Math.max(0, Math.round((end - start) / 1000)); return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`;
+}
+function taskEngineLine(engine) {
+  if (!engine) return "";
+  const who = engine.profileName || (engine.backend && engine.backend !== "http" ? TASK_BACKENDS[engine.backend] : engine.providerName || cleanUrl(engine.baseUrl) || "翻译 API");
+  const bits = [engine.model || (engine.backend && engine.backend !== "http" ? "默认模型" : ""), engine.reasoningEffort && `强度 ${engine.reasoningEffort}`].filter(Boolean);
+  return `<span class="task-engine" style="--v:${/^#[0-9a-f]{6}$/i.test(engine.profileColor || "") ? engine.profileColor : "var(--muted)"}"><i aria-hidden="true"></i><strong>${escapeHtml(who)}</strong>${bits.length ? ` · ${escapeHtml(bits.join(" · "))}` : ""}</span>`;
+}
+function taskDetails(task) {
+  const e = task.engine || {}, d = task.errorDetail || {};
+  const row = (label, value) => value === undefined || value === null || value === "" ? "" : `<dt>${label}</dt><dd>${escapeHtml(String(value))}</dd>`;
+  const block = (label, value) => value ? `<div class="task-raw"><span>${label}</span><pre>${escapeHtml(String(value))}</pre></div>` : "";
+  const book = data.books.find((b) => b.id === task.bookId); const chapter = book?.chapters.find((c) => c.id === task.chapterId);
+  const run = chapter?.translationRun?.id === task.id ? chapter.translationRun : null;
+  const blocks = run?.blocks || [];
+  const blockModels = [...new Set(blocks.map((b) => b.engine?.model).filter(Boolean))];
+  const range = task.range && task.range.type !== "whole" ? (task.range.type === "pages" ? `PDF 第 ${task.range.start}–${task.range.end} 页` : `第 ${task.range.start}–${task.range.end} 段`) : task.chapterId ? "整章" : "";
+  return `<details class="task-details" data-task-details="${escapeAttribute(task.id)}" ${openTaskDetails.has(task.id) ? "open" : ""}><summary>详情</summary>
+    ${task.error && friendlyTaskError(task) !== String(task.error).trim() ? `<div class="task-failure"><strong>完整报错</strong><p>${escapeHtml(task.error)}</p></div>` : ""}
+    <dl class="task-facts">
+      ${row("引擎", e.backend ? TASK_BACKENDS[e.backend] || e.backend : "")}${row("档案", e.profileName)}${row("服务", e.backend === "http" || !e.backend ? e.providerName : "")}${row("接口", e.backend === "http" || !e.backend ? cleanUrl(e.baseUrl) : "")}
+      ${row("模型", e.model || (e.backend && e.backend !== "http" ? "CLI 默认模型" : ""))}${row("推理强度", e.reasoningEffort)}${row("协议", e.protocol && (e.backend === "http" || !e.backend) ? e.protocol : "")}${row("输出上限", e.maxOutputTokens && (e.backend === "http" || !e.backend) ? `${e.maxOutputTokens} Token` : "")}
+      ${row("每块字数", e.translationBlockChars)}${row("方式", task.mode === "refine" ? "精校" : task.mode === "draft" ? "初译" : "")}${row("范围", range)}
+      ${row("加入队列", formatDate(task.createdAt))}${row("开始", task.startedAt ? formatDate(task.startedAt) : "")}${row("结束", task.finishedAt ? formatDate(task.finishedAt) : "")}${row("耗时", taskDuration(task))}
+      ${blocks.length ? row("分块", `${blocks.filter((b) => b.status === "completed").length} / ${blocks.length} 块已完成${blockModels.length > 1 ? ` · 用过的模型：${blockModels.join("、")}` : ""}`) : ""}
+      ${row("错误码", task.errorCode)}${row("HTTP 状态", d.status)}${row("请求地址", d.endpoint)}${row("结束原因", d.finishReason)}
+    </dl>
+    ${block("服务返回的原始内容", d.response)}${block("CLI 报告", d.result)}${block("CLI 错误输出", d.stderr)}${block("截断前已生成的部分", d.partialText)}
+    ${!task.error && !task.engine ? '<p class="task-empty-detail">这条任务没有记录引擎或错误信息（旧版本创建的任务不含这些字段）。</p>' : ""}
+  </details>`;
+}
 function renderTasks() {
   setHeader("本地队列", "任务中心");
   const rank = { queued: 0, running: 0, paused: 1, failed: 2, cancelled: 3, completed: 4 };
   const tasks = data.books.flatMap((book) => (book.tasks || []).map((task) => ({ ...task, bookTitle: book.title, bookId: book.id, demo: book.demo }))).sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
   const active = tasks.filter((task) => ["queued", "running", "paused"].includes(task.status)); const history = tasks.filter((task) => !["queued", "running", "paused"].includes(task.status));
-  const rows = (items, activeRows = false) => items.map((task) => `<div class="task-row ${activeRows ? "active-task" : ""}"><div><strong>${escapeHtml(task.type)}</strong><small class="subline">${escapeHtml(task.bookTitle)}</small></div><div><span>${escapeHtml(task.detail || task.type)}</span>${task.error ? `<small class="task-error">${escapeHtml(friendlyTaskError(task))}</small>` : ""}<div class="progress"><i style="width:${task.progress || 0}%"></i></div><small>${formatDate(task.updatedAt || task.createdAt)}</small></div><span>${status(task.status)}</span><div class="task-actions"><button data-task-open="${task.id}">打开成果</button>${["failed", "cancelled"].includes(task.status) && task.chapterId ? `<button data-task-retry="${task.id}">继续翻译</button>` : ""}${!task.demo && ["queued", "running"].includes(task.status) ? `<button data-task-action="pause" data-task="${task.id}">暂停</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : !task.demo && task.status === "paused" ? `<button data-task-action="resume" data-task="${task.id}">继续</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : `<button data-task-delete="${task.id}">删除</button>`}</div></div>`).join("");
+  const rows = (items, activeRows = false) => items.map((task) => `<div class="task-row ${activeRows ? "active-task" : ""}"><div><strong>${escapeHtml(task.type)}</strong><small class="subline">${escapeHtml(task.bookTitle)}</small></div><div class="task-main"><span>${escapeHtml(taskTitle(task))}</span>${taskEngineLine(task.engine)}${task.error ? `<small class="task-error">${escapeHtml(friendlyTaskError(task))}</small>` : ""}${taskDetails(task)}<div class="progress"><i style="width:${task.progress || 0}%"></i></div><small>${formatDate(task.updatedAt || task.createdAt)}</small></div><span>${status(task.status)}</span><div class="task-actions"><button data-task-open="${task.id}">打开成果</button>${["failed", "cancelled"].includes(task.status) && task.chapterId ? `<button data-task-retry="${task.id}">继续翻译</button>` : ""}${!task.demo && ["queued", "running"].includes(task.status) ? `<button data-task-action="pause" data-task="${task.id}">暂停</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : !task.demo && task.status === "paused" ? `<button data-task-action="resume" data-task="${task.id}">继续</button><button data-task-action="cancel" data-task="${task.id}">取消</button>` : `<button data-task-delete="${task.id}">删除</button>`}</div></div>`).join("");
   content.innerHTML = `<div class="section-head"><div><p class="eyebrow">NOW / 当前状态</p><h2>正在运行</h2></div><span>${active.length} 个</span></div><div class="panel active-task-list">${rows(active, true) || '<div class="empty slim">当前没有运行中的任务。可以继续阅读或选择章节开始翻译。</div>'}</div><div class="section-head"><div><p class="eyebrow">HISTORY / 最近记录</p><h2>历史任务</h2></div>${history.length ? '<button id="clear-finished-tasks">清理全部历史</button>' : ""}</div><div class="panel">${rows(history) || '<div class="empty slim">暂无历史任务</div>'}</div>`;
+  content.querySelectorAll("[data-task-details]").forEach((node) => node.addEventListener("toggle", () => { if (node.open) openTaskDetails.add(node.dataset.taskDetails); else openTaskDetails.delete(node.dataset.taskDetails); }));
   content.querySelectorAll("[data-task-action]").forEach((button) => button.onclick = () => taskAction(button.dataset.task, button.dataset.taskAction));
   content.querySelectorAll("[data-task-delete]").forEach((button) => button.onclick = () => deleteTask(button.dataset.taskDelete));
   content.querySelectorAll("[data-task-open]").forEach((button) => button.onclick = () => { const task = tasks.find((t) => t.id === button.dataset.taskOpen); task.chapterId ? renderWorkspace(task.bookId, task.chapterId) : renderBook(task.bookId); });
@@ -547,6 +591,7 @@ async function renderSettings() {
     <details class="panel panel-pad storage-panel"><summary>本机数据与迁移</summary><div class="section-head settings-head"><div><h2>本机数据</h2><p>书籍、译文、导出和 API 配置保存在此目录。</p></div></div><code>${escapeHtml(capabilities.dataDirectory || "")}</code><p>如需迁移，请先停止工作台，再复制整个数据目录；启动前可设置 <code>TRANSLATION_LIBRARY_DATA_DIR</code> 指向新位置。</p></details>
     <form class="panel panel-pad settings-form" id="provider-form">
       <div class="section-head settings-head"><div><h2>翻译引擎 <span class="default-badge">翻译与注释</span></h2><p>选择 API 或已安装的 CLI；翻译、精校与注释使用同一引擎。</p></div>${status(configured ? "approved" : "open", configured ? "已配置" : "待配置")}</div>
+      <div class="engine-switch" id="engine-switch" aria-label="已存的引擎，点一下切换"></div>
       <label>引擎<select id="provider-backend">${["http", "codex", "opencode", "antigravity", "claude"].map((id) => `<option value="${id}" ${id === (providerSettings.backend || "http") ? "selected" : ""}>${{ http: "翻译 API", codex: "Codex CLI", opencode: "OpenCode CLI", antigravity: "Antigravity CLI", claude: "Claude Code CLI" }[id]}</option>`).join("")}</select></label>
       <div id="cli-settings">
       <label id="opencode-mode-label">OpenCode 连接方式<select id="opencode-mode"><option value="cli" ${providerSettings.opencodeMode !== "server" ? "selected" : ""}>直接调用 CLI</option><option value="server" ${providerSettings.opencodeMode === "server" ? "selected" : ""} ${providerSettings.supportsOpenCodeServer ? "" : "disabled"}>连接本地服务 · 在桌面端查看会话</option></select></label>
@@ -564,7 +609,9 @@ async function renderSettings() {
       <div id="http-settings"><label class="preset-picker">服务商与模型<select id="provider-preset">${presetOptions}<option value="custom" ${selectedPreset === "custom" ? "selected" : ""}>自定义 · OpenAI 兼容接口</option></select></label>
       <div class="preset-note" id="preset-note"></div>
       <label>翻译 API 密钥<input id="provider-key" type="password" autocomplete="new-password" placeholder="${providerSettings.hasApiKey ? `已保存 ${escapeHtml(providerSettings.keyHint)}；留空则保持不变` : "粘贴 API Key"}"/></label>
-      <details class="settings-advanced"><summary>高级设置：接口地址、模型参数与费用估算</summary>
+      <div class="model-picker"><label>模型<select id="provider-model-select"><option value="">填好密钥后自动读取…</option></select></label><button type="button" id="load-http-models">重新读取</button></div>
+      <p id="http-model-hint" class="field-hint" role="status">选好模型会自动测试；测试通过即自动保存。</p>
+      <details class="settings-advanced" id="provider-advanced"><summary>高级设置：接口地址、模型参数与费用估算</summary>
       <div class="form-grid"><label>服务名称<input id="provider-name" value="${escapeHtml(providerSettings.providerName || "")}" placeholder="例如：我的翻译 API"/></label>
       <label>接口协议<select id="provider-protocol"><option value="openai-chat" ${providerSettings.protocol === "openai-chat" ? "selected" : ""}>OpenAI-compatible Chat Completions</option><option value="openai-responses" ${providerSettings.protocol === "openai-responses" ? "selected" : ""}>OpenAI Responses API</option></select></label></div>
       <label>API 基础地址<input id="provider-url" type="url" value="${escapeHtml(providerSettings.baseUrl || "")}" placeholder="https://example.com/v1"/></label>
@@ -608,7 +655,7 @@ async function renderSettings() {
     document.querySelector("#manual-cli-model").hidden = modelSelect.value !== "__manual";
   };
   modelSelect.value = modelInput.value ? "__manual" : "";
-  modelSelect.onchange = () => { if (modelSelect.value !== "__manual") modelInput.value = modelSelect.value; else modelInput.value = ""; updateEffort(); };
+  modelSelect.onchange = () => { if (modelSelect.value !== "__manual") modelInput.value = modelSelect.value; else modelInput.value = ""; updateEffort(); if (modelSelect.value !== "__manual" && modelCatalog.length) testProviderSettings({ auto: true }); };
   modelInput.oninput = () => updateEffort();
   const updateBackend = () => {
     const cli = backendSelect.value !== "http", opencode = backendSelect.value === "opencode", server = opencode && document.querySelector("#opencode-mode").value === "server";
@@ -617,7 +664,10 @@ async function renderSettings() {
     document.querySelector("#opencode-mode-notice").hidden = !opencode || Boolean(providerSettings.supportsOpenCodeServer);
     document.querySelector("#probe-cli").textContent = server ? "检测服务与目录" : "检测安装";
   }; updateBackend(); updateEffort();
-  backendSelect.onchange = () => { document.querySelector("#provider-cli-path").value = ""; document.querySelector("#cli-model-hint").textContent = "读取本机模型目录后，可选择对应的强度。"; document.querySelector("#cli-probe-result").textContent = "登录状态尚未验证；使用 CLI 已有登录，测试成功后确认可用。"; modelCatalog = []; modelInput.value = ""; modelSelect.innerHTML = '<option value="">CLI 默认模型</option><option value="__manual">手动填写模型 ID</option>'; updateBackend(); updateEffort(); };
+  backendSelect.onchange = () => { document.querySelector("#provider-cli-path").value = ""; document.querySelector("#cli-model-hint").textContent = "读取本机模型目录后，可选择对应的强度。"; document.querySelector("#cli-probe-result").textContent = "登录状态尚未验证；使用 CLI 已有登录，测试成功后确认可用。"; modelCatalog = []; modelInput.value = ""; modelSelect.innerHTML = '<option value="">CLI 默认模型</option><option value="__manual">手动填写模型 ID</option>'; updateBackend(); updateEffort();
+    if (backendSelect.value === "http") { scheduleHttpModels(0); return; }
+    // A newly chosen CLI is checked and its models listed right away.
+    document.querySelector("#probe-cli").click(); document.querySelector("#load-cli-models").click(); };
   for (const id of ["opencode-mode", "opencode-server-url", "opencode-directory", "opencode-username", "opencode-password", "clear-opencode-password", "provider-cli-path"]) document.getElementById(id).addEventListener("change", () => {
     modelCatalog = []; modelSelect.innerHTML = '<option value="">引擎默认模型</option><option value="__manual">手动填写模型 ID</option>'; modelSelect.value = modelInput.value ? "__manual" : ""; updateEffort(); updateBackend();
     document.querySelector("#cli-model-hint").textContent = "连接配置已变化，请重新读取模型与强度。"; document.querySelector("#cli-probe-result").textContent = "连接配置尚未检测。";
@@ -637,7 +687,20 @@ async function renderSettings() {
   };
   if (providerSettings.backend && providerSettings.backend !== "http") document.querySelector("#load-cli-models").click();
   document.querySelector("#probe-cli").onclick = async () => { const box = document.querySelector("#cli-probe-result"), connection = JSON.stringify(cliConnectionPayload()); box.textContent = "正在检测…"; try { const result = await request("/api/provider/probe", { method: "POST", headers: { "content-type": "application/json" }, body: connection }); if (connection !== JSON.stringify(cliConnectionPayload())) return; box.textContent = result.error || (result.mode === "server" ? `OpenCode ${result.version} · 服务可连接，项目目录匹配；模型调用需测试确认` : `${result.version || "已安装"} · ${result.login === "logged-in" ? "已登录，模型调用需测试确认" : result.login === "logged-out" ? "未登录或登录已过期：请在终端运行 claude，输入 /login 登录" : "登录状态需测试确认"}`); } catch (e) { if (connection === JSON.stringify(cliConnectionPayload())) box.textContent = e.message; } };
-  document.querySelector("#provider-preset").addEventListener("change", applyProviderPreset);
+  document.querySelector("#provider-preset").addEventListener("change", (event) => { applyProviderPreset(event); scheduleHttpModels(300); });
+  // APIs: read the model list as soon as there is enough to ask with; choosing a model tests and saves it.
+  document.querySelector("#load-http-models").onclick = () => loadHttpModels();
+  document.querySelector("#provider-key").addEventListener("input", (event) => { if (event.target.value.trim().length >= 8) scheduleHttpModels(900); });
+  for (const id of ["provider-url", "provider-no-auth"]) document.getElementById(id).addEventListener("change", () => scheduleHttpModels(200));
+  document.querySelector("#provider-model").addEventListener("change", () => syncHttpModelSelect());
+  document.querySelector("#provider-model-select").onchange = (event) => {
+    const value = event.target.value;
+    if (value === "__manual") { document.querySelector("#provider-advanced").open = true; document.querySelector("#provider-model").focus(); return; }
+    if (!value) return;
+    document.querySelector("#provider-model").value = value; testProviderSettings({ auto: true });
+  };
+  if ((!providerSettings.backend || providerSettings.backend === "http") && (providerSettings.hasApiKey || providerSettings.noAuth)) loadHttpModels({ quiet: true });
+  else syncHttpModelSelect();
   document.querySelector("#provider-key").addEventListener("input", (event) => { if (event.target.value) document.querySelector("#clear-provider-key").checked = false; });
   document.querySelector("#test-provider").addEventListener("click", testProviderSettings);
   document.querySelector("#provider-form").addEventListener("submit", saveProviderSettings);
@@ -648,6 +711,20 @@ async function renderSettings() {
 }
 
 const ENGINE_NAMES = { http: "翻译 API", codex: "Codex CLI", opencode: "OpenCode CLI", antigravity: "Antigravity CLI", claude: "Claude Code CLI" };
+// Saved engines as a row of buttons: one click makes a profile the active engine.
+function renderEngineSwitch(state) {
+  const bar = document.querySelector("#engine-switch"); if (!bar) return;
+  bar.innerHTML = state.profiles.length
+    ? `<span class="engine-switch-label">已存的引擎</span>${state.profiles.map((p) => `<button type="button" class="engine-chip" style="--v:${p.color}" data-switch-profile="${escapeAttribute(p.id)}" aria-pressed="${p.active}" title="${escapeAttribute(engineSummary(p))}"><i aria-hidden="true"></i><span>${escapeHtml(p.name)}</span><small>${escapeHtml(p.model || ENGINE_NAMES[p.backend] || "")}</small></button>`).join("")}<button type="button" class="engine-chip-add" data-jump-profile>＋ 存为新档案</button>`
+    : `<span class="engine-switch-empty">配好一个引擎并测试通过后，可以<button type="button" class="link-button" data-jump-profile>存为档案</button>，以后在这里一键切换。</span>`;
+  bar.querySelectorAll("[data-switch-profile]").forEach((b) => b.onclick = async () => {
+    if (b.getAttribute("aria-pressed") === "true") return;
+    bar.querySelectorAll("button").forEach((x) => { x.disabled = true; });
+    try { providerSettings = await request(`/api/engine-profiles/${b.dataset.switchProfile}/activate`, { method: "POST" }); notify(`已切换到：${b.querySelector("span").textContent}`); updateApiStatus(); renderSettings(); }
+    catch (error) { notify(error.message); bar.querySelectorAll("button").forEach((x) => { x.disabled = false; }); }
+  });
+  bar.querySelectorAll("[data-jump-profile]").forEach((b) => b.onclick = () => { const input = document.querySelector("#profile-name"); input?.scrollIntoView({ block: "center", behavior: "smooth" }); input?.focus({ preventScroll: true }); });
+}
 function engineSummary(p) {
   const who = !p.backend || p.backend === "http" ? p.providerName || p.host || "翻译 API" : ENGINE_NAMES[p.backend] || p.backend;
   return [who, p.model || "默认模型", p.reasoningEffort].filter(Boolean).join(" · ");
@@ -658,6 +735,7 @@ async function renderProfiles() {
   let state;
   try { state = await request("/api/engine-profiles"); } catch (error) { box.innerHTML = `<p class="profile-empty">无法读取引擎档案：${escapeHtml(error.message)}</p>`; return; }
   if (!document.body.contains(box)) return;
+  renderEngineSwitch(state);
   const used = new Set(state.profiles.map((p) => p.color));
   const nextColor = (state.palette.find((c) => !used.has(c.hex)) || state.palette[0]).hex;
   const swatches = (name, selected) => `<div class="swatches" role="radiogroup" aria-label="颜色">${state.palette.map((c) => `<label class="swatch" style="--v:${c.hex}" title="${escapeAttribute(c.name)}"><input type="radio" name="${escapeAttribute(name)}" value="${c.hex}" ${c.hex === selected ? "checked" : ""}/><span aria-hidden="true"></span><small>${escapeHtml(c.name)}</small></label>`).join("")}</div>`;
@@ -703,16 +781,55 @@ async function testSearchSettings() {
   finally { button.disabled = false; }
 }
 
-async function testProviderSettings() {
+let providerTestRun = 0;
+async function testProviderSettings(options = {}) {
   if (!document.querySelector("#provider-form").reportValidity()) return;
   const button = document.querySelector("#test-provider"); const resultBox = document.querySelector("#provider-test-result");
-  button.disabled = true; button.textContent = "正在测试…"; resultBox.classList.add("hidden");
+  const run = ++providerTestRun; const payload = providerPayload();
+  const label = payload.model || "默认模型";
+  button.disabled = true; button.textContent = "正在测试…";
+  resultBox.className = "notice test-running"; resultBox.textContent = `正在用 ${label} 发送一次测试请求…`;
   try {
-    const result = await request("/api/provider/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...providerPayload(), save: true }) });
-    resultBox.textContent = `连接成功 · ${result.model} · ${result.latencyMs} ms · ${result.inputTokens ?? "未知"} 输入 / ${result.outputTokens ?? "未知"} 输出 Token`;
-    resultBox.classList.remove("hidden"); notify("引擎连接成功，配置已保存"); updateApiStatus();
-  } catch (error) { resultBox.textContent = `测试失败：${error.message}`; resultBox.classList.remove("hidden"); }
-  finally { button.disabled = false; button.textContent = "测试并保存"; }
+    const result = await request("/api/provider/test", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, save: true }) });
+    if (run !== providerTestRun) return;
+    resultBox.className = "notice test-ok";
+    resultBox.textContent = `✓ 测试通过并已保存 · ${result.model || label} · ${result.latencyMs} ms · ${result.inputTokens ?? "未知"} 输入 / ${result.outputTokens ?? "未知"} 输出 Token${result.preview ? ` · 回复“${result.preview}”` : ""}`;
+    notify(options.auto ? `已自动保存：${result.model || label}` : "引擎连接成功，配置已保存"); updateApiStatus();
+    providerSettings = await request("/api/provider"); renderProfiles();
+  } catch (error) {
+    if (run !== providerTestRun) return;
+    resultBox.className = "notice test-failed"; resultBox.textContent = `✗ 测试未通过，没有保存：${error.message}`;
+  } finally { if (run === providerTestRun) { button.disabled = false; button.textContent = "测试并保存"; } }
+}
+
+// ---- API model list -------------------------------------------------------------------------------------------
+let httpModelTimer = null, httpModelRun = 0, httpModels = [];
+function scheduleHttpModels(delay = 600) { clearTimeout(httpModelTimer); httpModelTimer = setTimeout(() => loadHttpModels({ quiet: true }), delay); }
+function syncHttpModelSelect() {
+  const select = document.querySelector("#provider-model-select"); if (!select) return;
+  const current = document.querySelector("#provider-model").value.trim();
+  const known = httpModels.some((m) => m.id === current);
+  select.innerHTML = (httpModels.length ? "" : '<option value="">填好密钥后自动读取…</option>')
+    + (current && !known ? `<option value="${escapeAttribute(current)}">${escapeHtml(current)}（当前）</option>` : "")
+    + httpModels.map((m) => `<option value="${escapeAttribute(m.id)}">${escapeHtml(m.name)}</option>`).join("")
+    + '<option value="__manual">手动填写模型 ID…</option>';
+  select.value = current || (httpModels.length ? "" : "");
+}
+async function loadHttpModels({ quiet = false } = {}) {
+  const hint = document.querySelector("#http-model-hint"); if (!hint || document.querySelector("#provider-backend").value !== "http") return;
+  const payload = providerPayload();
+  if (!payload.baseUrl) { hint.textContent = "请先选择服务商或填写 API 基础地址。"; return; }
+  if (!payload.noAuth && !payload.apiKey && !(providerSettings.hasApiKey && originOf(providerSettings.baseUrl) === originOf(payload.baseUrl))) { hint.textContent = "填好 API 密钥后会自动读取模型列表。"; httpModels = []; syncHttpModelSelect(); return; }
+  const run = ++httpModelRun; hint.textContent = "正在读取模型列表…"; document.querySelector("#load-http-models").disabled = true;
+  try {
+    const result = await request("/api/provider/models", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    if (run !== httpModelRun) return;
+    httpModels = result.models; syncHttpModelSelect();
+    hint.textContent = `已读取 ${httpModels.length} 个模型 · ${result.hint} 选好模型会自动测试并保存。`;
+  } catch (error) {
+    if (run !== httpModelRun) return;
+    httpModels = []; syncHttpModelSelect(); hint.textContent = `没能读取模型列表：${error.message}${quiet ? "。可以检查密钥后点“重新读取”，或手动填写模型 ID。" : ""}`;
+  } finally { if (run === httpModelRun) document.querySelector("#load-http-models").disabled = false; }
 }
 
 function updatePresetNote() {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { comparableVersions, partialVersions, compareUnits } from "../public/compare-core.js";
@@ -12,6 +12,7 @@ const folder = await mkdtemp(join(tmpdir(), "xxg-compare-"));
 const mock = http.createServer(async (req, res) => {
   let body = ""; for await (const part of req) body += part;
   const request = JSON.parse(body); const prompt = request.messages[1].content;
+  if (request.model === "broken") { res.writeHead(500, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: { type: "server_error", message: "upstream exploded" } })); }
   const match = prompt.match(/原文段落：\n(\[[^\n]+\])/);
   res.writeHead(200, { "content-type": "application/json" });
   // Post-translation annotation analysis: nothing to report.
@@ -100,6 +101,17 @@ try {
   // Editing the excerpt into a different shape retires it from comparison instead of showing stale text.
   await call("PATCH", `/api/books/book/chapters/c1/segments/${excerpt.id}`, { translation: "一\n\n二" });
   assert.equal(partialVersions(await call("GET", "/api/books/book/chapters/c1"), ids, profiles).length, 0);
+
+  // A failing engine leaves a task record that says what happened and with which settings.
+  const saved = await readFile(join(folder, "secrets/provider.json"), "utf8");
+  await writeFile(join(folder, "secrets/provider.json"), providerFor("broken"));
+  await call("POST", "/api/books/book/chapters/c1/translate", { mode: "draft" }); const finished = await idle();
+  const failed = finished.find((t) => t.status === "failed");
+  assert.ok(failed, "a failed task is recorded");
+  assert.match(failed.error, /HTTP 500 · server_error.*upstream exploded/);
+  assert.equal(failed.errorDetail.status, 500); assert.match(failed.errorDetail.response, /upstream exploded/); assert.equal(failed.errorDetail.model, "broken");
+  assert.equal(failed.engine.model, "broken"); assert.ok(failed.startedAt && failed.finishedAt && failed.finishedAt >= failed.startedAt);
+  await writeFile(join(folder, "secrets/provider.json"), saved);
 
   // Switching and housekeeping.
   assert.equal((await call("POST", `/api/engine-profiles/${a.id}/activate`)).model, "model-a");

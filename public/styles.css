@@ -291,3 +291,22 @@ button:disabled { color: var(--muted); }
   .stat span { font-size: 10px; }
   .book-index .book-card { min-height: 0; }
 }
+
+/* Task details: which engine ran it, and what came back when it failed. */
+.task-main { min-width: 0; display: grid; gap: 4px; }
+.task-engine { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.task-engine i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--v); }
+.task-engine strong { color: var(--ink); font-weight: 600; }
+.task-details { font-size: 12.5px; }
+.task-details summary { width: max-content; color: var(--blue); cursor: pointer; font-size: 12px; }
+.task-details[open] { margin: 4px 0 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.task-failure { margin: 8px 0 10px; padding: 8px 10px; border-left: 3px solid var(--rust); background: var(--paper); }
+.task-failure strong { display: block; margin-bottom: 2px; color: var(--rust); font-size: 12px; }
+.task-failure p { margin: 0; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 8px 0; }
+.task-facts dt { color: var(--muted); }
+.task-facts dd { margin: 0; overflow-wrap: anywhere; }
+.task-raw { margin-top: 8px; }
+.task-raw span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+.task-raw pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); font: 12px/1.6 Consolas, "SFMono-Regular", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-empty-detail { color: var(--muted); }

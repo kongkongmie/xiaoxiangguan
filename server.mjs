@@ -1,6 +1,6 @@
 import { discoverCliModels, validateCliChoice } from "./lib/cli-models.mjs";
 import { probeCli } from "./lib/cli-provider.mjs";
-import { providerSnapshot } from "./lib/providers.mjs";
+import { providerSnapshot, listHttpModels } from "./lib/providers.mjs";
 import { OpenCodeServer, usesOpenCodeServer, discoverOpenCodeServerModels, probeOpenCodeServer, stopOpenCodeSessions } from "./lib/opencode-server.mjs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sourceParagraphs, sourceFingerprint, revisionSegments, DEFAULT_TRANSLATION_BLOCK_CHARS, validateTranslationBlockChars } from "./lib/alignment.mjs";
@@ -207,6 +207,12 @@ function openCodeSettings(body, existing) {
   next.opencodePassword = body.clearOpenCodePassword ? "" : String(body.opencodePassword || "") || (sameServer ? existing.opencodePassword || "" : "");
   return next;
 }
+// Unsaved form values over the saved engine; the saved key is reused only for the same service origin.
+async function candidateProvider(body) {
+  const previous = await readProvider();
+  let sameOrigin = true; try { sameOrigin = !body.baseUrl || new URL(body.baseUrl).origin === new URL(previous.baseUrl).origin; } catch { sameOrigin = false; }
+  return { ...previous, ...body, ...openCodeSettings(body, previous), apiKey: body.clearKey ? "" : body.apiKey || (sameOrigin ? previous.apiKey : "") };
+}
 async function providerForRequest(body) {
   const existing = await readProvider();
   return { ...existing, ...body, ...openCodeSettings(body, existing) };
@@ -366,6 +372,12 @@ async function updateTask(taskId, changes) {
     return null;
   });
 }
+function taskErrorDetail(error) {
+  const detail = error?.detail && typeof error.detail === "object" ? error.detail : {};
+  const clip = (value, n) => (typeof value === "string" ? value.slice(0, n) : value ?? undefined);
+  const out = { kind: detail.kind, status: detail.status, endpoint: detail.endpoint, backend: detail.backend, model: detail.model, reasoningEffort: detail.reasoningEffort, response: clip(detail.response, 1500), stderr: clip(detail.stderr, 1500), result: clip(detail.result, 1500), finishReason: error?.finishReason, partialText: clip(error?.partialText, 400) };
+  return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined && v !== ""));
+}
 async function startTask(bookId, type, detail, runner, metadata = {}) {
   return withBookMutation(bookId, async () => {
     if (stopping) throw new Error("后台正在关闭，请重新启动后再操作");
@@ -380,9 +392,13 @@ async function startTask(bookId, type, detail, runner, metadata = {}) {
     // Leave the mutation context before executing long-running model work.
     taskQueue = taskQueue.catch(() => {}).then(() => mutationContext.run(false, async () => {
       try {
-        await waitControl(control); control.started = true; await updateTask(task.id, { status: "running" }); console.log(`任务开始：${type}`);
-        await runner(task, control); checkControl(control); await updateTask(task.id, { status: "completed", progress: 100 }); console.log(`任务完成：${type}`);
-      } catch (error) { await updateTask(task.id, { status: control.cancelled ? "cancelled" : "failed", error: error.message, errorCode: error.code, detail: `${detail} · ${error.message}` }); console.log(`任务${control.cancelled ? "已停止" : "未完成"}：${type}`); }
+        await waitControl(control); control.started = true; await updateTask(task.id, { status: "running", startedAt: new Date().toISOString() }); console.log(`任务开始：${type}`);
+        await runner(task, control); checkControl(control); await updateTask(task.id, { status: "completed", progress: 100, finishedAt: new Date().toISOString() }); console.log(`任务完成：${type}`);
+      } catch (error) {
+        // Record what went wrong in full: message, code, and what the service or CLI actually returned.
+        await updateTask(task.id, { status: control.cancelled ? "cancelled" : "failed", error: error.message, errorCode: error.code, errorDetail: taskErrorDetail(error), finishedAt: new Date().toISOString(), detail: `${detail} · ${error.message}` });
+        console.log(`任务${control.cancelled ? "已停止" : "未完成"}：${type}`);
+      }
       finally { taskControls.delete(task.id); }
     }));
     return task;
@@ -643,12 +659,14 @@ async function api(req, res, url) {
   if (profileMatch && req.method === "POST" && profileMatch[2]) return json(res, 200, await activateProfile(profileMatch[1]));
   if (profileMatch && req.method === "PATCH" && !profileMatch[2]) return json(res, 200, await updateProfile(profileMatch[1], await readJson(req)));
   if (profileMatch && req.method === "DELETE" && !profileMatch[2]) return json(res, 200, await deleteProfile(profileMatch[1]));
-  if (req.method === "POST" && url.pathname === "/api/provider/models") { const provider = await providerForRequest(await readJson(req)); return json(res, 200, await discoverProviderModels(provider, true)); }
+  if (req.method === "POST" && url.pathname === "/api/provider/models") {
+    const body = await readJson(req);
+    if (!body.backend || body.backend === "http") return json(res, 200, await listHttpModels(await candidateProvider(body)));
+    const provider = await providerForRequest(body); return json(res, 200, await discoverProviderModels(provider, true));
+  }
   if (req.method === "POST" && url.pathname === "/api/provider/probe") { const provider = await providerForRequest(await readJson(req)); return json(res, 200, usesOpenCodeServer(provider) ? await probeOpenCodeServer(provider) : await probeCli(provider.backend, provider.cliPath)); }
   if (req.method === "POST" && url.pathname === "/api/provider/test") {
-    const body = await readJson(req); const previous = await readProvider();
-    const sameOrigin = !body.baseUrl || new URL(body.baseUrl).origin === new URL(previous.baseUrl).origin;
-    const candidate = { ...previous, ...body, ...openCodeSettings(body, previous), apiKey: body.clearKey ? "" : body.apiKey || (sameOrigin ? previous.apiKey : "") };
+    const body = await readJson(req); const candidate = await candidateProvider(body);
     if (candidate.backend && candidate.backend !== "http") validateCliChoice(candidate, candidate.reasoningEffort ? await discoverProviderModels(candidate) : null);
     const result = await testProviderConnection(candidate);
     if (body.save) await saveProvider(body);
