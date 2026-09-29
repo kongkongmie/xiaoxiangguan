@@ -9,9 +9,10 @@ import { comparableVersions, partialVersions, compareUnits } from "../public/com
 
 const folder = await mkdtemp(join(tmpdir(), "xxg-compare-"));
 // Each mock model signs its translation with its own name so versions are distinguishable.
+const received = [];
 const mock = http.createServer(async (req, res) => {
   let body = ""; for await (const part of req) body += part;
-  const request = JSON.parse(body); const prompt = request.messages[1].content;
+  const request = JSON.parse(body); received.push(request); const prompt = request.messages.find((m) => /原文段落|选中了/.test(m.content) && m.role === "user")?.content || request.messages[1].content;
   if (request.model === "broken") { res.writeHead(500, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: { type: "server_error", message: "upstream exploded" } })); }
   const match = prompt.match(/原文段落：\n(\[[^\n]+\])/);
   // Word correspondence: one real match and one paraphrase that must be dropped.
@@ -120,6 +121,26 @@ try {
   assert.deepEqual(aligned.matches, ["译第1段"]); assert.equal(aligned.dropped, 1); assert.equal(aligned.note, "逐字对应");
   await assert.rejects(call("POST", "/api/books/book/chapters/c1/align", { side: "source", selection: "", sourceText: "a", translationText: "b" }), /选中/);
   await assert.rejects(call("POST", "/api/books/book/chapters/missing/align", { side: "source", selection: "a", sourceText: "a", translationText: "b" }), /不存在/);
+
+  // Prompt sets: one bound to engine B only; its opening, closing and name reach the model and the task record.
+  const prompts = await call("GET", "/api/prompts");
+  assert.equal(prompts.defaultId, "builtin"); assert.ok(prompts.variables.some((v) => v.name === "原文段落" && v.required));
+  await assert.rejects(call("PUT", "/api/prompts", { sets: [{ id: "p-bad", name: "坏的", user: "请翻译" }] }), /原文段落/);
+  const literary = { id: "p-literary", name: "出版译本", system: "你是出版社的文学译者。{{风格要求}}", user: "{{作品}}·{{章节}}\n{{原文段落}}", closing: "请按已出版译本的标准完整译出。", closingMode: "separate" };
+  const promptState = await call("PUT", "/api/prompts", { sets: [literary], defaultId: "builtin", bindings: { [b.id]: "p-literary", "no-such-profile": "p-literary" } });
+  assert.deepEqual(promptState.bindings, { [b.id]: "p-literary" }, "bindings to unknown profiles are dropped");
+  const preview = await call("POST", "/api/prompts/preview", { set: literary, bookId: "book", chapterId: "c1", mode: "draft" });
+  assert.deepEqual(preview.messages.map((m) => m.role), ["system", "user", "user"]); assert.match(preview.messages[0].content, /文学译者[\s\S]*成功时只输出 JSON/);
+  received.length = 0;
+  const boundTask = await call("POST", "/api/books/book/chapters/c1/translate", { mode: "draft", profileId: b.id }); const bound = (await idle()).find((t) => t.id === boundTask.id);
+  const sentB = received.find((r) => r.model === "model-b"); assert.ok(sentB, "engine B was called");
+  assert.match(sentB.messages[0].content, /^你是出版社的文学译者。/); assert.equal(sentB.messages.at(-1).content, "请按已出版译本的标准完整译出。");
+  assert.equal(bound.engine.promptSetName, "出版译本");
+  received.length = 0;
+  const plainTask = await call("POST", "/api/books/book/chapters/c1/translate", { mode: "draft", profileId: a.id }); const plain = (await idle()).find((t) => t.id === plainTask.id);
+  const sentA = received.find((r) => r.model === "model-a"); assert.match(sentA.messages[0].content, /^你是严谨的/, "engine A keeps the built-in prompt");
+  assert.equal(plain.engine.promptSetId, "builtin");
+  await call("PUT", "/api/prompts", { sets: [], defaultId: "builtin", bindings: {} });
 
   // Switching and housekeeping.
   assert.equal((await call("POST", `/api/engine-profiles/${a.id}/activate`)).model, "model-a");

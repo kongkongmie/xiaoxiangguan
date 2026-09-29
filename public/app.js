@@ -6,6 +6,7 @@ import { readerMode } from "./reader-mode.js";
 import { pageBooks } from "./library-index.js";
 import { cleanReaderExplanation } from "./reader-notes.js";
 import { statusBadge as status } from "./status-badge.js";
+import { mountPromptStudio } from "./prompt-studio.js";
 
 initThemes();
 
@@ -436,7 +437,7 @@ function taskDetails(task) {
     <dl class="task-facts">
       ${row("引擎", e.backend ? TASK_BACKENDS[e.backend] || e.backend : "")}${row("档案", e.profileName)}${row("服务", e.backend === "http" || !e.backend ? e.providerName : "")}${row("接口", e.backend === "http" || !e.backend ? cleanUrl(e.baseUrl) : "")}
       ${row("模型", e.model || (e.backend && e.backend !== "http" ? "CLI 默认模型" : ""))}${row("推理强度", e.reasoningEffort)}${row("协议", e.protocol && (e.backend === "http" || !e.backend) ? e.protocol : "")}${row("输出上限", e.maxOutputTokens && (e.backend === "http" || !e.backend) ? `${e.maxOutputTokens} Token` : "")}
-      ${e.protocol === "gemini" ? row("思考预算", e.thinkingBudget === "" || e.thinkingBudget == null ? "模型默认" : `${e.thinkingBudget} Token${Number(e.thinkingBudget) === 0 ? "（关闭思考）" : ""}`) + row("拦截后重发", `${e.geminiRetries ?? 2} 次`) : ""}${row("每块字数", e.translationBlockChars)}${row("方式", task.mode === "refine" ? "精校" : task.mode === "draft" ? "初译" : "")}${row("范围", range)}
+      ${e.protocol === "gemini" ? row("思考预算", e.thinkingBudget === "" || e.thinkingBudget == null ? "模型默认" : `${e.thinkingBudget} Token${Number(e.thinkingBudget) === 0 ? "（关闭思考）" : ""}`) + row("拦截后重发", `${e.geminiRetries ?? 2} 次`) : ""}${row("提示词", e.promptSetName)}${row("每块字数", e.translationBlockChars)}${row("方式", task.mode === "refine" ? "精校" : task.mode === "draft" ? "初译" : "")}${row("范围", range)}
       ${row("加入队列", formatDate(task.createdAt))}${row("开始", task.startedAt ? formatDate(task.startedAt) : "")}${row("结束", task.finishedAt ? formatDate(task.finishedAt) : "")}${row("耗时", taskDuration(task))}
       ${blocks.length ? row("分块", `${blocks.filter((b) => b.status === "completed").length} / ${blocks.length} 块已完成${blockModels.length > 1 ? ` · 用过的模型：${blockModels.join("、")}` : ""}`) : ""}
       ${row("错误码", task.errorCode)}${row("HTTP 状态", d.status)}${row("请求地址", d.endpoint)}${row("结束原因", d.finishReason)}
@@ -696,6 +697,7 @@ async function renderSettings() {
       <div class="dialog-actions"><button id="test-provider" type="button">测试并保存</button><button class="primary" type="submit">保存引擎配置</button></div>
     </form>
     <section class="panel panel-pad profiles-panel" id="profiles-panel" aria-live="polite"><p class="profile-empty">正在读取引擎档案…</p></section>
+    <section class="panel panel-pad prompt-studio" id="prompt-studio"><p class="profile-empty">正在读取提示词…</p></section>
     <form class="panel panel-pad settings-form" id="search-settings-form">
       <div class="section-head settings-head"><div><h2>联网搜索 API <span class="default-badge">可选 · 独立配置</span></h2><p>只用于少量高风险说法的 AI 查证；不影响初译、译名释义和读者注释。</p></div>${status(searchSettings.hasApiKey ? "approved" : "not_started", searchSettings.hasApiKey ? "已配置" : "可选")}</div>
       <p class="notice" id="search-usage-status">${escapeHtml(searchStatus(searchSettings))}。只有实际搜索请求计入额度；翻译模型用量单独计算。</p>
@@ -776,6 +778,7 @@ async function renderSettings() {
   document.querySelector("#test-search-settings").addEventListener("click", testSearchSettings);
   updatePresetNote();
   renderProfiles();
+  mountPromptStudio(document.querySelector("#prompt-studio"), { request, notify, books: () => data?.books || [] });
 }
 
 const ENGINE_NAMES = { http: "翻译 API", codex: "Codex CLI", opencode: "OpenCode CLI", antigravity: "Antigravity CLI", claude: "Claude Code CLI" };

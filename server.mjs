@@ -11,8 +11,9 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs
 import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEpub } from "./lib/epub.mjs";
+import { BUILTIN_PROMPT_SET, PROMPT_VARIABLES, normalizePromptSet, promptSetFor } from "./lib/prompts.mjs";
 import { isIllustrationText } from "./public/illustrations.js";
-import { analyzeChapterEntities, checkControl, waitControl, extractDocument, identifyHighRisk, japaneseOcrPath, ocrStatus, readChapterText, testProviderConnection, alignSelection, bookImages, bookImagesDir, translateChapter, writeTranslation } from "./lib/engine.mjs";
+import { analyzeChapterEntities, checkControl, waitControl, extractDocument, identifyHighRisk, japaneseOcrPath, ocrStatus, readChapterText, testProviderConnection, alignSelection, bookImages, bookImagesDir, previewTranslationMessages, translateChapter, writeTranslation } from "./lib/engine.mjs";
 import { SOURCE_LANGUAGES, sourceLanguage } from "./public/languages.js";
 import { searchResearchSources, verifyIssue } from "./lib/research.mjs";
 import { createSearchBudget } from "./lib/search-budget.mjs";
@@ -27,6 +28,7 @@ const PUBLIC = join(ROOT, "public");
 const DATA_ROOT = dataRoot({ root: ROOT });
 const DATA = join(DATA_ROOT, "data");
 const DATA_FILE = join(DATA, "library.json");
+const PROMPTS_FILE = join(DATA, "prompts.json");
 const SECRETS = join(DATA_ROOT, "secrets");
 const PROVIDER_FILE = join(SECRETS, "provider.json");
 const SEARCH_FILE = join(SECRETS, "search.json");
@@ -451,12 +453,36 @@ function selectSourceRange(source, range = { type: "whole" }) {
   }
   throw new Error("不支持的翻译范围");
 }
+// Translation prompt sets: the reader's own templates, a default, and which engine profile uses which.
+async function readPrompts() {
+  try { const state = JSON.parse(await readFile(PROMPTS_FILE, "utf8")); return { sets: Array.isArray(state.sets) ? state.sets : [], defaultId: state.defaultId || "builtin", bindings: state.bindings && typeof state.bindings === "object" ? state.bindings : {} }; }
+  catch { return { sets: [], defaultId: "builtin", bindings: {} }; }
+}
+async function savePrompts(body) {
+  const seen = new Set();
+  const sets = (Array.isArray(body.sets) ? body.sets : []).slice(0, 50).map((set) => { const clean = normalizePromptSet(set); if (seen.has(clean.id)) throw new Error("提示词编号重复"); seen.add(clean.id); return clean; });
+  const known = (id) => id === "builtin" || seen.has(id);
+  const profiles = new Set((await readProfiles()).map((p) => p.id));
+  const bindings = Object.fromEntries(Object.entries(body.bindings && typeof body.bindings === "object" ? body.bindings : {}).filter(([profile, id]) => profiles.has(profile) && known(id)));
+  const state = { sets, defaultId: known(body.defaultId) ? body.defaultId : "builtin", bindings, updatedAt: new Date().toISOString() };
+  await mkdir(DATA, { recursive: true }); const temp = `${PROMPTS_FILE}.tmp`;
+  await writeFile(temp, `${JSON.stringify(state, null, 2)}\n`, "utf8"); await rename(temp, PROMPTS_FILE);
+  return state;
+}
+async function promptsView() { return { ...(await readPrompts()), builtin: BUILTIN_PROMPT_SET, variables: PROMPT_VARIABLES, profiles: (await listProfiles()).profiles }; }
+async function promptSetForProvider(provider, profile) {
+  const id = profile?.id || (await readProfiles()).find((p) => engineKey(p.stored || {}) === engineKey(provider))?.id;
+  return promptSetFor(await readPrompts(), id);
+}
+
 async function translateBookChapter(bookId, chapterId, mode, range, retry = false, profileId = "") {
   const rangeLabel = range?.type === "paragraphs" ? `第 ${range.start}–${range.end} 段` : range?.type === "pages" ? `PDF 第 ${range.start}–${range.end} 页` : "整章";
   // Freeze configuration when queued; never persist API keys in task or block metadata.
   const { provider, profile } = await providerForTranslation(profileId);
   if (provider.backend && provider.backend !== "http") validateCliChoice(provider, provider.reasoningEffort ? await discoverProviderModels(provider) : null);
-  const engine = { ...providerSnapshot(provider), ...(profile ? { profileId: profile.id, profileName: profile.name, profileColor: profile.color } : {}) };
+  // The prompt set is frozen with the engine when queued, like every other setting.
+  const promptSet = await promptSetForProvider(provider, profile);
+  const engine = { ...providerSnapshot(provider), ...(profile ? { profileId: profile.id, profileName: profile.name, profileColor: profile.color } : {}), promptSetId: promptSet.id, promptSetName: promptSet.name };
   const detail = `${chapterId} · ${rangeLabel}${profileId && profile ? ` · ${profile.name}` : ""}`;
   // Different engines on the same chapter are separate requests; only an identical engine is a duplicate.
   return startTask(bookId, mode === "refine" ? "译文精校" : "章节翻译", detail, async (task, control) => {
@@ -492,7 +518,7 @@ async function translateBookChapter(bookId, chapterId, mode, range, retry = fals
     });
     let result;
     try {
-      result = await translateChapter({ provider, book, chapter, source: selected.source, paragraphs, existingDraft, mode, previousTail: previousText.slice(-1200), glossary: book.glossary || [], characters: book.characters || [], control, resumeBlocks: run.blocks,
+      result = await translateChapter({ provider, book, chapter, source: selected.source, paragraphs, existingDraft, mode, previousTail: previousText.slice(-1200), glossary: book.glossary || [], characters: book.characters || [], promptSet, control, resumeBlocks: run.blocks,
         onProgress: (progress, detail) => updateTask(task.id, { progress, detail: `${chapter.title} · ${detail}` }),
         onBlock: (block) => withBookMutation(bookId, async () => {
           checkControl(control);
@@ -575,7 +601,7 @@ async function maybeAutoReviseChapter({ bookId, chapterId, source, provider, ris
   const existingDraft = await readChapterText(bookRoot(book), chapter, "current");
   let revised;
   try {
-    revised = await translateChapter({ provider, book, chapter, source, existingDraft, mode: "refine", correction: { originalTerm: risk.originalTerm, currentChinese: risk.proposed, suggestedChinese: research.suggestedChinese, evidence: research.sources.map((entry) => `${entry.title || entry.url}：${entry.excerpt}`).join("；").slice(0, 1500) }, control });
+    revised = await translateChapter({ provider, book, chapter, source, existingDraft, mode: "refine", promptSet: await promptSetForProvider(provider), correction: { originalTerm: risk.originalTerm, currentChinese: risk.proposed, suggestedChinese: research.suggestedChinese, evidence: research.sources.map((entry) => `${entry.title || entry.url}：${entry.excerpt}`).join("；").slice(0, 1500) }, control });
   } catch { return false; }
   if (!revised.text.includes(research.suggestedChinese) || revised.text.includes(risk.proposed)) return false;
   return withBookMutation(bookId, async () => {
@@ -657,6 +683,19 @@ async function api(req, res, url) {
   if (req.method === "GET" && url.pathname === "/api/provider") return json(res, 200, publicProvider(await readProvider()));
   if (req.method === "PUT" && url.pathname === "/api/provider") return json(res, 200, await saveProvider(await readJson(req)));
   if (req.method === "GET" && url.pathname === "/api/engine-profiles") return json(res, 200, await listProfiles());
+  if (req.method === "GET" && url.pathname === "/api/prompts") return json(res, 200, await promptsView());
+  if (req.method === "PUT" && url.pathname === "/api/prompts") { try { await savePrompts(await readJson(req)); } catch (error) { return json(res, 400, { error: error.message }); } return json(res, 200, await promptsView()); }
+  if (req.method === "POST" && url.pathname === "/api/prompts/preview") {
+    // What the first block of a real chapter would send with a (possibly unsaved) set.
+    const body = await readJson(req); const data = await readLibrary();
+    const book = data.books.find((b) => b.id === body.bookId); const chapter = book?.chapters.find((c) => c.id === body.chapterId);
+    if (!chapter) return json(res, 404, { error: "请选择一个已整理的章节" });
+    let set; try { set = body.set?.builtin || !body.set ? BUILTIN_PROMPT_SET : normalizePromptSet(body.set); } catch (error) { return json(res, 400, { error: error.message }); }
+    const { provider } = await providerForTranslation(typeof body.profileId === "string" ? body.profileId : "");
+    const source = await readChapterText(bookRoot(book), chapter, "source");
+    const index = book.chapters.indexOf(chapter); const previous = index > 0 ? await readChapterText(bookRoot(book), book.chapters[index - 1], "current").catch(() => "") : "";
+    return json(res, 200, previewTranslationMessages({ provider, book, chapter, source, mode: body.mode === "refine" ? "refine" : "draft", promptSet: set, previousTail: String(previous || "").slice(-1200), existingDraft: await readChapterText(bookRoot(book), chapter, "current").catch(() => "") }));
+  }
   if (req.method === "POST" && url.pathname === "/api/engine-profiles") return json(res, 200, await saveProfileFromCurrent(await readJson(req)));
   const profileMatch = url.pathname.match(/^\/api\/engine-profiles\/([^/]+)(\/activate)?$/);
   if (profileMatch && req.method === "POST" && profileMatch[2]) return json(res, 200, await activateProfile(profileMatch[1]));
