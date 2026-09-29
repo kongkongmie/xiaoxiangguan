@@ -11,7 +11,7 @@ import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs
 import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEpub } from "./lib/epub.mjs";
-import { analyzeChapterEntities, checkControl, waitControl, extractDocument, identifyHighRisk, japaneseOcrPath, ocrStatus, readChapterText, testProviderConnection, translateChapter, writeTranslation } from "./lib/engine.mjs";
+import { analyzeChapterEntities, checkControl, waitControl, extractDocument, identifyHighRisk, japaneseOcrPath, ocrStatus, readChapterText, testProviderConnection, alignSelection, translateChapter, writeTranslation } from "./lib/engine.mjs";
 import { SOURCE_LANGUAGES, sourceLanguage } from "./public/languages.js";
 import { searchResearchSources, verifyIssue } from "./lib/research.mjs";
 import { createSearchBudget } from "./lib/search-budget.mjs";
@@ -244,7 +244,7 @@ async function saveProvider(body) {
     maxOutputTokens: Math.min(131072, Math.max(256, Number(body.maxOutputTokens || existing.maxOutputTokens || 8192))),
     inputPrice: Math.max(0, Number(body.inputPrice ?? existing.inputPrice ?? 0)),
     outputPrice: Math.max(0, Number(body.outputPrice ?? existing.outputPrice ?? 0)),
-    noAuth: Boolean(body.noAuth),
+    noAuth: Boolean(body.noAuth), stream: body.stream === undefined ? existing.stream !== false : Boolean(body.stream),
     apiKey: incomingKey || (body.clearKey || providerChanged ? "" : (existing.apiKey || "")), updatedAt: new Date().toISOString()
   };
   if (backend !== "http") {
@@ -375,7 +375,7 @@ async function updateTask(taskId, changes) {
 function taskErrorDetail(error) {
   const detail = error?.detail && typeof error.detail === "object" ? error.detail : {};
   const clip = (value, n) => (typeof value === "string" ? value.slice(0, n) : value ?? undefined);
-  const out = { kind: detail.kind, status: detail.status, endpoint: detail.endpoint, backend: detail.backend, model: detail.model, reasoningEffort: detail.reasoningEffort, response: clip(detail.response, 1500), stderr: clip(detail.stderr, 1500), result: clip(detail.result, 1500), finishReason: error?.finishReason, partialText: clip(error?.partialText, 400) };
+  const out = { kind: detail.kind, status: detail.status, endpoint: detail.endpoint, backend: detail.backend, model: detail.model, reasoningEffort: detail.reasoningEffort, stage: detail.stage, streaming: detail.streaming, elapsedMs: detail.elapsedMs, cause: detail.cause, partialChars: detail.partialChars, response: clip(detail.response, 1500), stderr: clip(detail.stderr, 1500), result: clip(detail.result, 1500), finishReason: error?.finishReason, partialText: clip(error?.partialText, 400) };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined && v !== ""));
 }
 async function startTask(bookId, type, detail, runner, metadata = {}) {
@@ -776,6 +776,17 @@ async function api(req, res, url) {
     chapter.revisionHistory.push({ id: chapter.revisionId, path: selected.path, segments: selected.segments || null, ...(selected.engine ? { engine: selected.engine } : {}), ...(selected.segmentSources ? { segmentSources: selected.segmentSources } : {}), origin: "reader", createdAt: chapter.updatedAt, reason: `读者恢复版本 ${selected.id}` });
     await saveLibrary(data); await syncProjectState(book); return json(res, 200, chapter);
   });
+  const alignMatch = url.pathname.match(/^\/api\/books\/([^/]+)\/chapters\/([^/]+)\/align$/);
+  if (alignMatch && req.method === "POST") {
+    const body = await readJson(req); const data = await readLibrary(); const book = data.books.find((b) => b.id === alignMatch[1]);
+    if (!book?.chapters.some((c) => c.id === alignMatch[2])) return json(res, 404, { error: "章节不存在" });
+    const text = (value, max) => typeof value === "string" && value.trim() && value.length <= max ? value : null;
+    const selection = text(body.selection, 300), sourceText = text(body.sourceText, 12000), translationText = text(body.translationText, 12000);
+    if (!["source", "translation"].includes(body.side) || !selection || !sourceText || !translationText) return json(res, 400, { error: "请选中一段不超过 300 字的文字" });
+    const { provider, profile } = await providerForTranslation(body.profileId);
+    const result = await alignSelection({ provider, book, side: body.side, selection: selection.trim(), sourceText, translationText });
+    return json(res, 200, { ...result, engine: profile?.name || provider.providerName || provider.backend || "" });
+  }
   const composeMatch = url.pathname.match(/^\/api\/books\/([^/]+)\/chapters\/([^/]+)\/compose(-draft)?$/);
   if (composeMatch && req.method === "PUT" && composeMatch[3]) return withBookMutation(composeMatch[1], async () => {
     // Unfinished picks survive reloads; they are hints only and are re-validated when composing.

@@ -29,6 +29,8 @@ export function createCompare({ room, strip, view, bar, read, book, request, not
   };
   const pickedCount = () => units.filter((u) => pickFor(u)).length;
   const unitOf = (paragraphId) => units.find((u) => u.ids.includes(paragraphId));
+  // Identical text from several versions: the rule shows every colour in turn.
+  const stripe = (versions) => `linear-gradient(to bottom, ${versions.map((v, i) => `${v.color} ${(i * 100) / versions.length}% ${((i + 1) * 100) / versions.length}%`).join(", ")})`;
   const sourceLabel = (v) => `<span class="v-name" style="--v:${v.color}"><i aria-hidden="true"></i>${esc(v.name)}${v.tag ? `<small>${esc(v.tag)}</small>` : ""}</span>`;
   // Identical wording from several engines is shown once, with every engine that produced it.
   const variantGroups = (unit) => {
@@ -105,14 +107,12 @@ export function createCompare({ room, strip, view, bar, read, book, request, not
       view.innerHTML = units.map((unit) => {
         const groups = variantGroups(unit);
         return `<section class="compare-row" data-ids="${esc(unit.key)}" data-unit="${esc(unit.key)}">
-          <div class="compare-original" lang="${esc(sourceLang)}"><span class="compare-no" aria-label="${esc(unitRange(unit))}">${unitNumber(unit)}</span>${unit.ids.map((id) => `<p>${esc(sourceText(id))}</p>`).join("")}</div>
+          <div class="compare-original" lang="${esc(sourceLang)}"><span class="compare-no" aria-label="${esc(unitRange(unit))}">${unitNumber(unit)}</span>${unit.ids.map((id) => `<p>${esc(sourceText(id))}</p>`).join("")}
+            <div class="compare-tools" lang="zh-CN"><button class="compare-link" data-toggle-custom>✎ 改写</button><button class="compare-link" data-open-paragraph>⇄ 现译这一段</button><span class="compare-state"></span></div></div>
           <div class="compare-variants" role="radiogroup" aria-label="${esc(unitRange(unit))}的译本">
-            ${groups.map((g) => `<div class="compare-variant" role="radio" tabindex="0" aria-checked="false" style="--v:${g.versions[0].color}" data-pick="${esc(g.versions[0].id)}" data-group="${esc(g.versions.map((v) => v.id).join(" "))}">
-              <div class="compare-sources">${g.versions.map(sourceLabel).join("")}<span class="compare-mark" aria-hidden="true"></span></div>
-              <p>${esc(g.text) || '<span class="compare-missing">（此处无译文）</span>'}</p></div>`).join("")}
-            ${groups.length === 1 && all().length > 1 ? '<p class="compare-agree">各译本在这里完全一致</p>' : ""}
+            ${groups.map((g) => { const names = g.versions.map((v) => v.label).join("、"); return `<div class="compare-variant${g.versions.length > 1 ? " is-shared" : ""}" role="radio" tabindex="0" aria-checked="false" title="${esc(names)}${g.versions.length > 1 ? " · 译文相同" : ""}" aria-label="${esc(names)}" style="--v:${g.versions[0].color};${g.versions.length > 1 ? `--stripe:${stripe(g.versions)}` : ""}" data-pick="${esc(g.versions[0].id)}" data-group="${esc(g.versions.map((v) => v.id).join(" "))}">
+              <p>${esc(g.text) || '<span class="compare-missing">（此处无译文）</span>'}</p></div>`; }).join("")}
             <div class="compare-custom" style="--v:${CUSTOM_COLOR}" hidden><textarea aria-label="改写${esc(unitRange(unit))}">${esc(custom[unit.key] ?? "")}</textarea><div class="compare-custom-actions"><button data-use-custom>用我的改写</button><button data-close-custom>收起</button></div></div>
-            <div class="compare-tools"><button class="compare-link" data-toggle-custom>✎ 改写</button><button class="compare-link" data-open-paragraph>⇄ 现译这一段</button><span class="compare-state"></span></div>
           </div>
         </section>`;
       }).join("");
@@ -145,7 +145,6 @@ export function createCompare({ room, strip, view, bar, read, book, request, not
         const on = pick !== "custom" && node.dataset.group.split(" ").includes(effective);
         node.classList.toggle("is-chosen", on); node.classList.toggle("is-default", on && !pick);
         node.setAttribute("aria-checked", String(on));
-        node.querySelector(".compare-mark").textContent = on ? (pick ? "✓ 已选" : "默认") : "";
       });
       const box = row.querySelector(".compare-custom"); box.classList.toggle("is-chosen", pick === "custom"); if (pick === "custom") box.hidden = false;
       row.querySelector(".compare-state").innerHTML = pick === "custom" ? `<i style="--v:${CUSTOM_COLOR}" aria-hidden="true"></i>用我的改写` : "";

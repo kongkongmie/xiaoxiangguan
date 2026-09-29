@@ -2,6 +2,7 @@ import { themeButton } from "./themes.js";
 import { sourceLanguage } from "./languages.js";
 import { statusIcon, statusBadge } from "./status-badge.js";
 import { createCompare } from "./reader-compare.js";
+import { createAlign } from "./reader-align.js";
 
 export function readingState(bookId) {
   try { return JSON.parse(localStorage.getItem(`reader:${bookId}`) || "{}"); } catch { return {}; }
@@ -47,12 +48,13 @@ export function mountReader({ container, book, chapter, request, notify, navigat
       <button id="reader-mode" class="desktop-control">只看译文</button><button id="reader-side" class="mobile-control">看译文</button>${themeButton()}<button id="reader-options">阅读设置</button><button id="reader-tools">注释与工具</button>
     </header>
     <div class="reading-progress"><span id="reader-progress" role="status" aria-live="polite"></span><span class="spacer"></span><button id="reader-follow" hidden>回到翻译位置</button><button id="reader-pause" hidden>暂停</button><button id="reader-cancel" hidden>取消</button><button id="reader-retry" hidden>从未完成块继续</button></div>
+    <div id="version-strip" class="version-strip" hidden></div>
+    <div id="alignment-notice" class="reading-notice"></div>
     <div class="parallel-pages">
       <section class="reading-page original-page" aria-label="原文"><div class="reading-page-head"><strong>原文</strong><small>${visibleSource.length} 段 · ${sourceLang}</small></div><div id="source-scroll" class="reading-scroll" lang="${sourceLang}" tabindex="0">${visibleSource.map((p, i) => `<p ${p.id ? `data-ids="${escape(p.id)}"` : ""} tabindex="0"><span class="paragraph-number" aria-hidden="true">${i + 1}</span>${escape(p.text)}</p>`).join("") || '<p>原文尚未提取，请返回目录整理章节。</p>'}</div></section>
       <div id="reader-divider" class="reader-divider desktop-control" role="separator" tabindex="0" aria-label="调整原译栏宽" aria-orientation="vertical" aria-valuemin="30" aria-valuemax="70" aria-valuenow="${prefs.ratio}"></div>
       <section class="reading-page translated-page" aria-label="中文译文"><div class="reading-page-head"><strong>中文译文</strong><div><button class="primary" id="translate-range">${chapter.translation ? "重新翻译" : "翻译本章"}</button><button id="edit-translation">${chapter.translation ? "编辑译文" : "手工写入译文"}</button><button id="approve">${statusIcon("approved")}<span id="approve-label">标记定稿</span></button><button id="cancel-edit" hidden>取消编辑</button><button id="save-draft" hidden>保存修改</button></div></div>
-        <div id="version-strip" class="version-strip" hidden></div>
-        <div id="translation-scroll" class="reading-scroll" lang="zh-CN" tabindex="0"><div id="alignment-notice" class="reading-notice"></div><div id="translation-read"></div><div id="compare-view" class="compare-view" hidden></div></div>
+        <div id="translation-scroll" class="reading-scroll" lang="zh-CN" tabindex="0"><div id="translation-read"></div><div id="compare-view" class="compare-view" hidden></div></div>
         <div id="compose-bar" class="compose-bar" hidden></div>
         <textarea id="translation" class="reading-editor" lang="zh-CN" aria-label="编辑中文译文" hidden>${escape(chapter.translation || "")}</textarea>
       </section>
@@ -162,6 +164,7 @@ export function mountReader({ container, book, chapter, request, notify, navigat
       clearTimeout(anchorTimer); saveAnchor();
     });
   }
+  const align = createAlign({ room, sourcePane, translatedPane, read, findNode, idsOf, request, book, chapter, notify, isActive: () => !editing && !compare.isComparing() && current.alignmentStatus !== "legacy" });
   const selectionChanged = () => { if (!getSelection().isCollapsed && container.contains(getSelection().anchorNode)) stopFollow(); else if (deferred && !editing) { const next = deferred; deferred = null; update(next); } };
   document.addEventListener("selectionchange", selectionChanged);
   const openDialog = (id) => { stopFollow(); $(id).showModal(); };
@@ -294,5 +297,5 @@ export function mountReader({ container, book, chapter, request, notify, navigat
   requestAnimationFrame(() => { if (disposed) return; const anchor = prefs.anchor; locate(sourcePane, anchor); locate(translatedPane, anchor); });
   const onResize = () => { const anchor = prefs.anchor; applyPrefs(); locate(activePane(), anchor); };
   narrow.addEventListener("change", onResize);
-  return { update, isEditing: () => editing || segmentDrafts.size > 0, destroy: () => { saveAnchor(); disposed = true; clearTimeout(anchorTimer); clearTimeout(searchTimer); document.removeEventListener("selectionchange", selectionChanged); narrow.removeEventListener("change", onResize); window.removeEventListener("workbench-theme-beforechange", beforeThemeChange); window.removeEventListener("workbench-themechange", afterThemeChange); } };
+  return { update, isEditing: () => editing || segmentDrafts.size > 0, destroy: () => { saveAnchor(); disposed = true; align.destroy(); clearTimeout(anchorTimer); clearTimeout(searchTimer); document.removeEventListener("selectionchange", selectionChanged); narrow.removeEventListener("change", onResize); window.removeEventListener("workbench-theme-beforechange", beforeThemeChange); window.removeEventListener("workbench-themechange", afterThemeChange); } };
 }

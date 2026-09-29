@@ -14,6 +14,8 @@ const mock = http.createServer(async (req, res) => {
   const request = JSON.parse(body); const prompt = request.messages[1].content;
   if (request.model === "broken") { res.writeHead(500, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: { type: "server_error", message: "upstream exploded" } })); }
   const match = prompt.match(/原文段落：\n(\[[^\n]+\])/);
+  // Word correspondence: one real match and one paraphrase that must be dropped.
+  if (/选中了：「/.test(prompt)) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: `好的：{"matches":["译第1段","并不存在的改写"],"note":"逐字对应"}` } }] })); }
   res.writeHead(200, { "content-type": "application/json" });
   // Post-translation annotation analysis: nothing to report.
   if (!match) return res.end(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ terms: [], characters: [], uncertainties: [], risks: [] }) } }] }));
@@ -112,6 +114,12 @@ try {
   assert.equal(failed.errorDetail.status, 500); assert.match(failed.errorDetail.response, /upstream exploded/); assert.equal(failed.errorDetail.model, "broken");
   assert.equal(failed.engine.model, "broken"); assert.ok(failed.startedAt && failed.finishedAt && failed.finishedAt >= failed.startedAt);
   await writeFile(join(folder, "secrets/provider.json"), saved);
+
+  // Word correspondence keeps only text that exists on the other side.
+  const aligned = await call("POST", "/api/books/book/chapters/c1/align", { side: "source", selection: "第一", sourceText: "第一段原文", translationText: "model-a 译第1段。" });
+  assert.deepEqual(aligned.matches, ["译第1段"]); assert.equal(aligned.dropped, 1); assert.equal(aligned.note, "逐字对应");
+  await assert.rejects(call("POST", "/api/books/book/chapters/c1/align", { side: "source", selection: "", sourceText: "a", translationText: "b" }), /选中/);
+  await assert.rejects(call("POST", "/api/books/book/chapters/missing/align", { side: "source", selection: "a", sourceText: "a", translationText: "b" }), /不存在/);
 
   // Switching and housekeeping.
   assert.equal((await call("POST", `/api/engine-profiles/${a.id}/activate`)).model, "model-a");

@@ -376,6 +376,7 @@ function taskDetails(task) {
       ${row("加入队列", formatDate(task.createdAt))}${row("开始", task.startedAt ? formatDate(task.startedAt) : "")}${row("结束", task.finishedAt ? formatDate(task.finishedAt) : "")}${row("耗时", taskDuration(task))}
       ${blocks.length ? row("分块", `${blocks.filter((b) => b.status === "completed").length} / ${blocks.length} 块已完成${blockModels.length > 1 ? ` · 用过的模型：${blockModels.join("、")}` : ""}`) : ""}
       ${row("错误码", task.errorCode)}${row("HTTP 状态", d.status)}${row("请求地址", d.endpoint)}${row("结束原因", d.finishReason)}
+      ${row("传输方式", e.backend === "http" || !e.backend ? (d.streaming ?? e.stream !== false) && e.protocol !== "openai-responses" ? "流式" : "一次性返回" : "")}${row("断开位置", { connect: "连接或等待回复时", read: "读取回复时", stream: "接收流式输出时" }[d.stage])}${row("断开前等了", Number.isFinite(d.elapsedMs) ? `${Math.round(d.elapsedMs / 1000)} 秒` : "")}${row("已收到", d.partialChars ? `${d.partialChars} 字` : "")}${row("底层错误", d.cause)}
     </dl>
     ${block("服务返回的原始内容", d.response)}${block("CLI 报告", d.result)}${block("CLI 错误输出", d.stderr)}${block("截断前已生成的部分", d.partialText)}
     ${!task.error && !task.engine ? '<p class="task-empty-detail">这条任务没有记录引擎或错误信息（旧版本创建的任务不含这些字段）。</p>' : ""}
@@ -619,6 +620,7 @@ async function renderSettings() {
       <label>单次最大输出 Token<input id="provider-max-output" type="number" min="256" max="131072" value="${providerSettings.maxOutputTokens || 8192}"/></label></div>
       <div class="form-grid"><label>每百万输入 Token 价格<input id="provider-input-price" type="number" min="0" step="0.0001" value="${providerSettings.inputPrice || 0}"/></label><label>每百万输出 Token 价格<input id="provider-output-price" type="number" min="0" step="0.0001" value="${providerSettings.outputPrice || 0}"/></label></div>
       <label class="check-row"><input id="provider-no-auth" type="checkbox" ${providerSettings.noAuth ? "checked" : ""}/> 本机接口不需要 API 密钥</label>
+      <label class="check-row"><input id="provider-stream" type="checkbox" ${providerSettings.stream !== false ? "checked" : ""}/> 流式传输（推荐：慢模型边想边传，中转站不会因为长时间没数据而断开；仅 Chat Completions 协议）</label>
       <label class="check-row"><input id="clear-provider-key" type="checkbox"/> 清除当前已保存的密钥</label>
       </details></div>
       <label>每块原文目标字符数<input id="provider-block-chars" type="number" min="500" max="6000" step="1" required value="${providerSettings.translationBlockChars ?? 3000}" aria-describedby="provider-block-hint"/></label>
@@ -866,7 +868,7 @@ function cliConnectionPayload() {
     opencodeUsername: document.querySelector("#opencode-username").value, opencodePassword: document.querySelector("#opencode-password").value, clearOpenCodePassword: document.querySelector("#clear-opencode-password").checked };
 }
 function providerPayload() {
-  const payload = { providerName: document.querySelector("#provider-name").value, protocol: document.querySelector("#provider-protocol").value, baseUrl: document.querySelector("#provider-url").value, model: document.querySelector("#provider-model").value, maxOutputTokens: Number(document.querySelector("#provider-max-output").value), inputPrice: Number(document.querySelector("#provider-input-price").value), outputPrice: Number(document.querySelector("#provider-output-price").value), apiKey: document.querySelector("#provider-key").value, noAuth: document.querySelector("#provider-no-auth").checked, clearKey: document.querySelector("#clear-provider-key").checked };
+  const payload = { providerName: document.querySelector("#provider-name").value, protocol: document.querySelector("#provider-protocol").value, baseUrl: document.querySelector("#provider-url").value, model: document.querySelector("#provider-model").value, maxOutputTokens: Number(document.querySelector("#provider-max-output").value), inputPrice: Number(document.querySelector("#provider-input-price").value), outputPrice: Number(document.querySelector("#provider-output-price").value), apiKey: document.querySelector("#provider-key").value, noAuth: document.querySelector("#provider-no-auth").checked, stream: document.querySelector("#provider-stream").checked, clearKey: document.querySelector("#clear-provider-key").checked };
   Object.assign(payload, cliConnectionPayload());
   payload.translationBlockChars = Number(document.querySelector("#provider-block-chars").value);
   payload.reasoningEffort = document.querySelector("#provider-effort").value;
