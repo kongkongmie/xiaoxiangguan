@@ -45,6 +45,8 @@ const providerPresets = {
   "openai-luna": { label: "OpenAI · GPT-6 Luna（默认）", providerName: "OpenAI · Luna", protocol: "openai-responses", baseUrl: "https://api.openai.com/v1", model: "gpt-6-luna", maxOutputTokens: 8192, inputPrice: 0.1, outputPrice: 0.5, noAuth: false, note: "适合日常长篇翻译；需要 OpenAI Platform API Key，费用与 ChatGPT 订阅分开计算。" },
   "deepseek-flash": { label: "DeepSeek · Flash（推荐）", providerName: "DeepSeek · Flash", protocol: "openai-chat", baseUrl: "https://api.deepseek.com", model: "deepseek-flash", maxOutputTokens: 8192, inputPrice: 0.3, outputPrice: 1.2, noAuth: false, note: "速度快、价格较低，适合批量初译。费用按官方峰值价格保守估算。" },
   "deepseek-pro": { label: "DeepSeek · V4 Pro", providerName: "DeepSeek · V4 Pro", protocol: "openai-chat", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro", maxOutputTokens: 16384, inputPrice: 1.32, outputPrice: 3.96, noAuth: false, note: "更适合文学精校和复杂文本。费用按官方峰值价格保守估算。" },
+  "gemini-relay": { label: "Gemini 反代 · 本机 AI Studio 中继", providerName: "Gemini 反代", protocol: "gemini", baseUrl: "http://127.0.0.1:8890", model: "", anyModel: true, maxOutputTokens: 32768, inputPrice: 0, outputPrice: 0, noAuth: true, note: "接你本机的 Gemini 反代（和酒馆用的是同一个地址）。先启动本地服务，再打开 AI Studio 中继网页并显示“已连接”，这里会自动读出模型列表；翻译时两者都要开着。" },
+  "google-gemini": { label: "Google Gemini · AI Studio API Key", providerName: "Google Gemini", protocol: "gemini", baseUrl: "https://generativelanguage.googleapis.com", model: "", anyModel: true, maxOutputTokens: 16384, inputPrice: 0, outputPrice: 0, noAuth: false, note: "Google 官方接口，需要 AI Studio 的 API Key；填好密钥会自动读取模型列表。价格请按官方价目自行填写。" },
   "ollama-local": { label: "Ollama · 本机模型", providerName: "Ollama · 本机", protocol: "openai-chat", baseUrl: "http://127.0.0.1:11434/v1", model: "qwen3:8b", maxOutputTokens: 8192, inputPrice: 0, outputPrice: 0, noAuth: true, note: "不产生 API 费用，但需要先安装 Ollama 并下载对应模型；模型名可按本机实际情况修改。" }
 };
 
@@ -53,7 +55,7 @@ function originOf(value) {
 }
 
 function matchingProviderPreset(settings) {
-  return Object.entries(providerPresets).find(([, preset]) => preset.protocol === settings.protocol && preset.baseUrl === settings.baseUrl && preset.model === settings.model)?.[0] || "custom";
+  return Object.entries(providerPresets).find(([, preset]) => preset.protocol === settings.protocol && preset.baseUrl === settings.baseUrl && (preset.anyModel || preset.model === settings.model))?.[0] || "custom";
 }
 
 async function request(url, options = {}) {
@@ -607,20 +609,20 @@ async function renderSettings() {
         <p>可在终端运行 <code>opencode serve --hostname 127.0.0.1 --port 4096</code> 启动服务。取消翻译只停止对应会话；关闭工作台后台后，共用服务仍可供桌面端使用。</p>
       </div>
       <label id="cli-path-label">可执行文件路径（留空自动检测）<input id="provider-cli-path" value="${escapeAttribute(providerSettings.cliPath || "")}" placeholder="原生 CLI 可执行文件的绝对路径"/></label><label>模型<select id="provider-cli-model-select"><option value="">引擎默认模型</option><option value="__manual">手动填写模型 ID</option></select></label><label id="manual-cli-model">模型 ID（OpenCode 使用 provider/model）<input id="provider-cli-model" value="${escapeAttribute(providerSettings.backend !== "http" ? providerSettings.model || "" : "")}"/></label><label>推理强度<select id="provider-effort"><option value="">默认强度</option></select></label><button type="button" id="load-cli-models">读取模型与强度</button><p id="cli-model-hint">读取本机模型目录后，可选择对应的强度。</p><button type="button" id="probe-cli">检测安装</button><p id="cli-probe-result" role="status">登录状态尚未验证；使用引擎已有登录，测试成功后确认可用。</p></div>
-      <div id="http-settings"><label class="preset-picker">服务商与模型<select id="provider-preset">${presetOptions}<option value="custom" ${selectedPreset === "custom" ? "selected" : ""}>自定义 · OpenAI 兼容接口</option></select></label>
+      <div id="http-settings"><label class="preset-picker">服务商与模型<select id="provider-preset">${presetOptions}<option value="custom" ${selectedPreset === "custom" ? "selected" : ""}>自定义 · 自己填协议和地址</option></select></label>
       <div class="preset-note" id="preset-note"></div>
-      <label>翻译 API 密钥<input id="provider-key" type="password" autocomplete="new-password" placeholder="${providerSettings.hasApiKey ? `已保存 ${escapeHtml(providerSettings.keyHint)}；留空则保持不变` : "粘贴 API Key"}"/></label>
+      <label>翻译 API 密钥<input id="provider-key" type="password" autocomplete="new-password" placeholder="${providerSettings.hasApiKey ? `已保存 ${escapeHtml(providerSettings.keyHint)}；留空则保持不变` : providerSettings.noAuth ? "本机接口无需密钥" : "粘贴 API Key"}"/></label>
       <div class="model-picker"><label>模型<select id="provider-model-select"><option value="">填好密钥后自动读取…</option></select></label><button type="button" id="load-http-models">重新读取</button></div>
       <p id="http-model-hint" class="field-hint" role="status">选好模型会自动测试；测试通过即自动保存。</p>
       <details class="settings-advanced" id="provider-advanced"><summary>高级设置：接口地址、模型参数与费用估算</summary>
       <div class="form-grid"><label>服务名称<input id="provider-name" value="${escapeHtml(providerSettings.providerName || "")}" placeholder="例如：我的翻译 API"/></label>
-      <label>接口协议<select id="provider-protocol"><option value="openai-chat" ${providerSettings.protocol === "openai-chat" ? "selected" : ""}>OpenAI-compatible Chat Completions</option><option value="openai-responses" ${providerSettings.protocol === "openai-responses" ? "selected" : ""}>OpenAI Responses API</option></select></label></div>
+      <label>接口协议<select id="provider-protocol"><option value="openai-chat" ${providerSettings.protocol === "openai-chat" ? "selected" : ""}>OpenAI-compatible Chat Completions</option><option value="openai-responses" ${providerSettings.protocol === "openai-responses" ? "selected" : ""}>OpenAI Responses API</option><option value="gemini" ${providerSettings.protocol === "gemini" ? "selected" : ""}>Google Gemini 原生（generateContent · AI Studio / 反代）</option></select></label></div>
       <label>API 基础地址<input id="provider-url" type="url" value="${escapeHtml(providerSettings.baseUrl || "")}" placeholder="https://example.com/v1"/></label>
       <div class="form-grid"><label>模型名称<input id="provider-model" value="${escapeHtml(providerSettings.model || "")}" placeholder="填写供应商提供的模型 ID"/></label>
       <label>单次最大输出 Token<input id="provider-max-output" type="number" min="256" max="131072" value="${providerSettings.maxOutputTokens || 8192}"/></label></div>
       <div class="form-grid"><label>每百万输入 Token 价格<input id="provider-input-price" type="number" min="0" step="0.0001" value="${providerSettings.inputPrice || 0}"/></label><label>每百万输出 Token 价格<input id="provider-output-price" type="number" min="0" step="0.0001" value="${providerSettings.outputPrice || 0}"/></label></div>
       <label class="check-row"><input id="provider-no-auth" type="checkbox" ${providerSettings.noAuth ? "checked" : ""}/> 本机接口不需要 API 密钥</label>
-      <label class="check-row"><input id="provider-stream" type="checkbox" ${providerSettings.stream !== false ? "checked" : ""}/> 流式传输（推荐：慢模型边想边传，中转站不会因为长时间没数据而断开；仅 Chat Completions 协议）</label>
+      <label class="check-row"><input id="provider-stream" type="checkbox" ${providerSettings.stream !== false ? "checked" : ""}/> 流式传输（推荐：慢模型边想边传，中转站不会因为长时间没数据而断开；适用于 Chat Completions 和 Gemini 协议）</label>
       <label class="check-row"><input id="clear-provider-key" type="checkbox"/> 清除当前已保存的密钥</label>
       </details></div>
       <label>每块原文目标字符数<input id="provider-block-chars" type="number" min="500" max="6000" step="1" required value="${providerSettings.translationBlockChars ?? 3000}" aria-describedby="provider-block-hint"/></label>
@@ -811,7 +813,7 @@ function syncHttpModelSelect() {
   const select = document.querySelector("#provider-model-select"); if (!select) return;
   const current = document.querySelector("#provider-model").value.trim();
   const known = httpModels.some((m) => m.id === current);
-  select.innerHTML = (httpModels.length ? "" : '<option value="">填好密钥后自动读取…</option>')
+  select.innerHTML = (httpModels.length ? (current ? "" : '<option value="">选择一个模型…</option>') : '<option value="">填好密钥后自动读取…</option>')
     + (current && !known ? `<option value="${escapeAttribute(current)}">${escapeHtml(current)}（当前）</option>` : "")
     + httpModels.map((m) => `<option value="${escapeAttribute(m.id)}">${escapeHtml(m.name)}</option>`).join("")
     + '<option value="__manual">手动填写模型 ID…</option>';
@@ -854,6 +856,7 @@ function applyProviderPreset(event) {
   document.querySelector("#provider-input-price").value = preset.inputPrice;
   document.querySelector("#provider-output-price").value = preset.outputPrice;
   document.querySelector("#provider-no-auth").checked = preset.noAuth;
+  if (!document.querySelector("#provider-key").value) document.querySelector("#provider-key").placeholder = preset.noAuth ? "本机接口无需密钥" : "请粘贴此服务商的 API Key";
   if (oldOrigin && newOrigin && oldOrigin !== newOrigin) {
     document.querySelector("#provider-key").value = "";
     document.querySelector("#provider-key").placeholder = preset.noAuth ? "本机接口无需密钥" : "请粘贴此服务商的 API Key";

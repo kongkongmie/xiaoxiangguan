@@ -225,7 +225,7 @@ async function saveProvider(body) {
   const backend = body.backend || existing.backend || "http";
   if (!["http", "codex", "opencode", "antigravity", "claude"].includes(backend)) throw new Error("不支持的翻译引擎");
   const protocol = String(body.protocol || existing.protocol);
-  if (!["openai-chat", "openai-responses"].includes(protocol)) throw new Error("不支持的接口协议");
+  if (!["openai-chat", "openai-responses", "gemini"].includes(protocol)) throw new Error("不支持的接口协议");
   const baseUrl = String(body.baseUrl ?? existing.baseUrl).trim().replace(/\/+$/, "");
   if (baseUrl) {
     const parsed = new URL(baseUrl);
