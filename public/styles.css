@@ -310,3 +310,23 @@ button:disabled { color: var(--muted); }
 .task-raw span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
 .task-raw pre { max-height: 220px; margin: 0; padding: 8px 10px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); font: 12px/1.6 Consolas, "SFMono-Regular", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-empty-detail { color: var(--muted); }
+
+/* Translating many chapters at once */
+.batch-dialog .batch-lead { margin: -8px 0 16px; color: var(--muted); line-height: 1.7; }
+.batch-engines { display: grid; gap: 6px; margin: 0 0 14px; padding: 0; border: 0; }
+.batch-engines legend { margin-bottom: 8px; font-weight: 600; }
+.batch-engine { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.batch-engine:has(input:checked) { border-color: var(--v); background: color-mix(in srgb, var(--v) 8%, var(--paper)); }
+.batch-engine input { margin: 0; }
+.batch-engine i { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--v); }
+.batch-engine span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.batch-engine small { color: var(--muted); }
+.batch-summary { margin: 14px 0 4px; padding: 12px 14px; border-radius: 8px; background: color-mix(in srgb, var(--ink) 4%, var(--paper)); line-height: 1.8; }
+.batch-summary p { margin: 0; }
+.batch-summary small { display: block; margin-top: 4px; color: var(--muted); line-height: 1.6; }
+.batch-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.batch-dialog .dialog-head { align-items: center; }
+.batch-dialog .dialog-head button { min-height: 32px; width: 32px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 22px; line-height: 1; }
+.batch-dialog .check-row { margin: 2px 0; }
+.batch-dialog input[type="checkbox"], .batch-dialog input[type="radio"] { min-height: 0; width: 16px; height: 16px; padding: 0; box-shadow: none; accent-color: var(--blue); }
+.batch-dialog .check-row { font-size: 14px; color: var(--ink); padding: 4px 2px; }

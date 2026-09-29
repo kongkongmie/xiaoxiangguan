@@ -39,6 +39,8 @@ function gemini(req, res, body) {
   const chunks = [{ responseId: "g-1", candidates: [{ content: { role: "model", parts: [{ text: "先想一想", thought: true }] } }] },
     { candidates: [{ content: { role: "model", parts: [{ text: "義兄" }] } }] },
     { candidates: [{ content: { role: "model", parts: [{ text: "译文" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 5, thoughtsTokenCount: 7 } }];
+  // Like the real relay: events, but labelled as JSON.
+  if (model === "mislabelled") { res.writeHead(200, { "content-type": "application/json" }); res.write(`data: ${JSON.stringify(chunks[1])}\n\n`); return setTimeout(() => res.end(`data: ${JSON.stringify(chunks[2])}\n\n`), 20); }
   if (req.url.includes("alt=sse")) { res.writeHead(200, { "content-type": "text/event-stream" }); for (const c of chunks) res.write(`data: ${JSON.stringify(c)}\r\n\r\n`); return res.end(); }
   res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(chunks.at(-1)));
 }
@@ -90,6 +92,7 @@ try {
   assert.match(offline.message, /HTTP 503/); assert.match(offline.message, /中继网页没有连上/);
   const blocked = await generate({ provider: gem("blocked"), messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
   assert.match(blocked.message, /PROHIBITED_CONTENT|拦截|拒绝/, blocked.message);
+  assert.equal((await generate({ provider: gem("mislabelled"), messages: [{ role: "user", content: "hi" }] })).text, "義兄译文");
   const listed = await listHttpModels(gem(""));
   assert.deepEqual(listed.models.map((m) => m.id), ["gemini-pro-test", "gemini-pro-test-抗截断假流"]);
   assert.equal(listed.models[0].name, "Gemini Pro Test · gemini-pro-test"); assert.match(geminiCalls.at(-1).url, /^\/v1beta\/models/);

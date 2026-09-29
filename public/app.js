@@ -206,7 +206,7 @@ function renderBook(bookId) {
     <div class="panel book-hero"><div class="cover ${book.format === "PDF" ? "paper" : ""}">${escapeHtml(book.title.slice(0, 6))}</div>
       <div><h2>${escapeHtml(book.title)}</h2><p>${escapeHtml(book.author || "作者未填写")} · ${book.format} · ${languageDetails(book).label} → 简体中文 · ${escapeHtml(book.profile)}</p>
       <div class="tags"><span class="tag">${works.length} 部作品</span><span class="tag">${info.total} 个正文单元</span><span class="tag">${info.approved} 个已批准</span>${book.demo ? '<span class="tag">演示数据</span>' : ""}</div></div>
-      <div class="hero-actions"><button id="edit-book">编辑资料</button><button class="danger-quiet" id="delete-book">删除作品</button><button data-nav="glossary">阅读质量</button>${needsExtraction ? '<button class="primary" id="extract-book">识别章节</button>' : '<button id="extract-book">重新整理目录</button><button class="primary" id="quick-export">导出可阅读 EPUB</button>'}</div></div>
+      <div class="hero-actions"><button id="edit-book">编辑资料</button><button class="danger-quiet" id="delete-book">删除作品</button><button data-nav="glossary">阅读质量</button>${needsExtraction ? '<button class="primary" id="extract-book">识别章节</button>' : '<button id="extract-book">重新整理目录</button><button id="translate-book">${works.length > 1 ? "翻译这部作品" : "翻译全书"}</button><button class="primary" id="quick-export">导出可阅读 EPUB</button>'}</div></div>
     <div class="catalog-layout">
       <aside class="panel panel-pad work-browser" ${works.length === 1 ? "hidden" : ""}><p class="eyebrow">COLLECTION</p><h2>作品目录</h2><p>先选择小说，再处理其中的章节。</p><label>当前作品<select id="work-select">${works.map((work) => `<option value="${work.id}" ${work.id === activeWork?.id ? "selected" : ""}>${escapeHtml(work.title)}（${work.chapterIds.length}）</option>`).join("")}</select></label><div class="work-summary"><strong>${escapeHtml(activeWork?.title || book.title)}</strong><span>${visibleChapters.length} 个正文单元</span></div><small>标题页、目录页和无正文的结构节点已隐藏，不会进入翻译队列。</small></aside>
       <section class="panel panel-pad selection-panel"><div class="section-head compact"><div><p class="eyebrow">SELECTION</p><h2>已选择章节</h2><p>勾选结果会保留；切换作品后也可以继续追加。</p></div><div class="scope-count"><strong id="scope-count">${state.selectedIds.size}</strong><span>章已选</span></div></div><div class="selected-chapters" id="selected-chapters"></div><details class="scope-more"><summary>保存为选集</summary><label class="scope-name-label">给这组选中的章节命名<input id="scope-name" placeholder="例如：上杉谦信·第一卷"/></label><small>“选集名称”是你为这组章节取的名称；下方会同时列出真正选中的章节。</small><button id="save-scope">保存到“我的选集”</button></details><div class="scope-actions"><button id="clear-selection">清空选择</button><span class="spacer"></span><button id="export-selected">导出所选（含草稿）</button><button class="primary" id="translate-selected">翻译所选章节</button></div></section>
@@ -242,6 +242,8 @@ function renderBook(bookId) {
   content.querySelectorAll("[data-delete-scope]").forEach((button) => button.onclick = () => deleteScope(book, button.dataset.deleteScope));
   document.querySelector("#save-scope").onclick = () => saveScope(book, [...state.selectedIds]);
   document.querySelector("#translate-selected").onclick = () => translateSelected(book, [...state.selectedIds]);
+  const translateBook = document.querySelector("#translate-book");
+  if (translateBook) translateBook.onclick = () => translateSelected(book, visibleChapters.map((c) => c.id), { title: works.length > 1 ? `翻译《${activeWork?.title || book.title}》` : "翻译全书" });
   document.querySelector("#export-selected").onclick = () => exportEpub(book.id, true, [...state.selectedIds]);
   updateSelection();
   const catalog = content.querySelector(".chapter-catalog"); const layout = content.querySelector(".catalog-layout");
@@ -324,10 +326,65 @@ async function deleteScope(book, scopeId) {
   try { await request(`/api/books/${book.id}/scopes/${scopeId}`, { method: "DELETE" }); await load(); renderBook(book.id); notify("选集已删除"); } catch (error) { notify(error.message); }
 }
 
-async function translateSelected(book, chapterIds) {
-  if (!chapterIds.length) return notify("请先选择至少一个章节");
-  if (!confirm(`将 ${chapterIds.length} 个章节依次加入本地翻译队列？任务会逐章调用 API。`)) return;
-  try { for (const chapterId of chapterIds) await request(`/api/books/${book.id}/chapters/${chapterId}/translate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "draft", range: { type: "whole" } }) }); await load(); renderBook(book.id); notify(`${chapterIds.length} 个章节已加入队列`); } catch (error) { notify(error.message); }
+// Several chapters at once: pick an engine, leave out what is already translated or nearly empty, and see a rough cost first.
+const hasTranslation = (c) => Boolean(c.translation || c.translationPath || c.polishedPath || c.activeRevisionId);
+const TINY_CHAPTER = 30;
+function batchEstimate(chapters, engine) {
+  const chars = chapters.reduce((sum, c) => sum + (c.characterCount || 0), 0);
+  const blockChars = engine.translationBlockChars || 3000;
+  const blocks = chapters.reduce((sum, c) => sum + Math.max(1, Math.ceil((c.characterCount || 0) / blockChars)), 0);
+  // Rough: about one token per CJK character each way, plus instructions and glossary sent with every block.
+  const input = Math.round(chars * 1.0 + blocks * 2000), output = Math.round(chars * 1.05);
+  const cost = engine.inputPrice || engine.outputPrice ? (input / 1e6) * (engine.inputPrice || 0) + (output / 1e6) * (engine.outputPrice || 0) : null;
+  return { chars, blocks, input, output, cost };
+}
+const wan = (n) => n >= 10000 ? `${(n / 10000).toFixed(n >= 100000 ? 0 : 1)} 万` : n.toLocaleString();
+async function translateSelected(book, chapterIds, { title = "翻译所选章节" } = {}) {
+  const picked = book.chapters.filter((c) => chapterIds.includes(c.id) && !c.id.endsWith("-pending"));
+  if (!picked.length) return notify("请先选择至少一个章节");
+  let profiles = [];
+  try { profiles = (await request("/api/engine-profiles")).profiles || []; } catch { /* the active engine still works */ }
+  const active = profiles.find((p) => p.active);
+  const current = { id: "", name: active?.name || engineSummary(providerSettings || {}), color: active?.color || "", model: active?.model || providerSettings?.model || "", inputPrice: active?.inputPrice ?? providerSettings?.inputPrice ?? 0, outputPrice: active?.outputPrice ?? providerSettings?.outputPrice ?? 0, translationBlockChars: active?.translationBlockChars || providerSettings?.translationBlockChars || 3000 };
+  const engines = [current, ...profiles.filter((p) => !p.active)];
+  const dialog = document.createElement("dialog"); dialog.className = "batch-dialog";
+  dialog.innerHTML = `<form method="dialog">
+    <div class="dialog-head"><h2>${escapeHtml(title)}</h2><button value="cancel" aria-label="关闭">×</button></div>
+    <p class="batch-lead">选中的 ${picked.length} 个章节会按顺序进入翻译队列，一章译完再译下一章。可以随时在“任务”里暂停或取消。</p>
+    <fieldset class="batch-engines"><legend>用哪个引擎</legend>${engines.map((e, i) => `<label class="batch-engine" style="--v:${/^#[0-9a-f]{6}$/i.test(e.color) ? e.color : "var(--muted)"}"><input type="radio" name="engine" value="${i}" ${i === 0 ? "checked" : ""}/><i aria-hidden="true"></i><span><strong>${escapeHtml(e.name)}</strong><small>${i === 0 ? "当前启用" : ""}${e.model ? `${i === 0 ? " · " : ""}${escapeHtml(e.model)}` : ""}</small></span></label>`).join("")}</fieldset>
+    <label class="check-row"><input type="checkbox" name="skipDone" checked/> 跳过已经有译文的章节</label>
+    <label class="check-row"><input type="checkbox" name="skipTiny" checked/> 跳过几乎没有文字的页（插图、扉页，少于 ${TINY_CHAPTER} 字）</label>
+    <div class="batch-summary" aria-live="polite"></div>
+    <div class="batch-actions"><button value="cancel">取消</button><button class="primary" value="go" data-go>加入队列</button></div></form>`;
+  document.body.append(dialog);
+  const form = dialog.querySelector("form");
+  const choice = () => {
+    const engine = engines[Number(form.engine.value) || 0];
+    const chapters = picked.filter((c) => !(form.skipDone.checked && hasTranslation(c)) && !(form.skipTiny.checked && Number.isFinite(c.characterCount) && c.characterCount < TINY_CHAPTER));
+    return { engine, chapters };
+  };
+  const refresh = () => {
+    const { engine, chapters } = choice(); const e = batchEstimate(chapters, engine);
+    const skipped = picked.length - chapters.length;
+    dialog.querySelector(".batch-summary").innerHTML = chapters.length
+      ? `<p><strong>${chapters.length} 章</strong>${skipped ? `（跳过 ${skipped} 章）` : ""} · 原文约 <strong>${wan(e.chars)}</strong> 字 · 约 ${e.blocks} 块</p>
+         <p>粗估用量：输入约 ${wan(e.input)} token，输出约 ${wan(e.output)} token${e.cost !== null ? ` · 按设置里的单价约 <strong>${e.cost < 0.1 ? e.cost.toFixed(3) : e.cost.toFixed(2)}</strong>` : ""}</p>
+         <small>按“一个汉字/假名约一个 token”估算，另加每块的说明和译名表；会思考的模型还要加上思考用量。实际以服务商账单为准。</small>`
+      : `<p>没有需要翻译的章节${skipped ? `（${skipped} 章已跳过）` : ""}。</p>`;
+    dialog.querySelector("[data-go]").disabled = !chapters.length;
+  };
+  form.addEventListener("change", refresh); refresh();
+  dialog.addEventListener("close", async () => {
+    const go = dialog.returnValue === "go"; const { engine, chapters } = choice(); dialog.remove();
+    if (!go || !chapters.length) return;
+    let queued = 0;
+    try {
+      for (const chapter of chapters) { await request(`/api/books/${book.id}/chapters/${chapter.id}/translate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "draft", range: { type: "whole" }, ...(engine.id ? { profileId: engine.id } : {}) }) }); queued++; }
+      notify(`${queued} 个章节已加入队列 · ${engine.name}`);
+    } catch (error) { notify(`${queued ? `已加入 ${queued} 章；` : ""}${error.message}`); }
+    await load(); renderBook(book.id);
+  });
+  dialog.showModal();
 }
 
 async function saveSegment(book, chapter, segmentId, statusValue) {

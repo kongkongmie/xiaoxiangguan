@@ -147,7 +147,7 @@ async function storedProvider() { return existsSync(PROVIDER_FILE) ? JSON.parse(
 function profileSummary(profile, activeKey) {
   const s = profile.stored || {}; const key = engineKey(s);
   let host = ""; try { host = s.baseUrl ? new URL(s.baseUrl).host : ""; } catch { /* keep blank */ }
-  return { id: profile.id, name: profile.name, color: profile.color, engineKey: key, active: key === activeKey, backend: s.backend || "http", model: s.model || "", providerName: s.providerName || "", host, reasoningEffort: s.reasoningEffort || "", keyProtection: s.keyProtection || "none", createdAt: profile.createdAt, updatedAt: profile.updatedAt };
+  return { id: profile.id, name: profile.name, color: profile.color, engineKey: key, active: key === activeKey, backend: s.backend || "http", model: s.model || "", providerName: s.providerName || "", host, reasoningEffort: s.reasoningEffort || "", inputPrice: Number(s.inputPrice) || 0, outputPrice: Number(s.outputPrice) || 0, translationBlockChars: s.translationBlockChars || 0, keyProtection: s.keyProtection || "none", createdAt: profile.createdAt, updatedAt: profile.updatedAt };
 }
 async function listProfiles() {
   const current = await storedProvider(); const activeKey = current ? engineKey(current) : "";
