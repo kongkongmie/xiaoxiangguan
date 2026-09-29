@@ -246,6 +246,8 @@ async function saveProvider(body) {
     inputPrice: Math.max(0, Number(body.inputPrice ?? existing.inputPrice ?? 0)),
     outputPrice: Math.max(0, Number(body.outputPrice ?? existing.outputPrice ?? 0)),
     noAuth: Boolean(body.noAuth), stream: body.stream === undefined ? existing.stream !== false : Boolean(body.stream),
+    geminiRetries: Math.max(0, Math.min(5, Math.round(Number(body.geminiRetries ?? existing.geminiRetries ?? 2)) || 0)),
+    thinkingBudget: (() => { const v = body.thinkingBudget === undefined ? existing.thinkingBudget : body.thinkingBudget; if (v === "" || v == null) return ""; const n = Math.round(Number(v)); return Number.isFinite(n) && n >= 0 ? Math.min(n, 65536) : ""; })(),
     apiKey: incomingKey || (body.clearKey || providerChanged ? "" : (existing.apiKey || "")), updatedAt: new Date().toISOString()
   };
   if (backend !== "http") {

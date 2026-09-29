@@ -26,7 +26,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 // A Gemini-native service, shaped like Google's API and the local AI Studio relay SillyTavern uses.
-const geminiCalls = [];
+const geminiCalls = []; let flaky = 0;
 function gemini(req, res, body) {
   geminiCalls.push({ url: req.url, key: req.headers["x-goog-api-key"], body: body ? JSON.parse(body) : null });
   if (req.method === "GET") { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ models: [
@@ -35,7 +35,10 @@ function gemini(req, res, body) {
     { name: "models/text-embedding", supportedGenerationMethods: ["embedContent"] }] })); }
   const model = decodeURIComponent(req.url.match(/models\/([^:]+):/)[1]);
   if (model === "offline") { res.writeHead(503, { "content-type": "text/plain" }); return res.end("BROWSER_NOT_CONNECTED: 网页未连接"); }
-  if (model === "blocked") { res.writeHead(200, { "content-type": "text/event-stream" }); return res.end(`data: ${JSON.stringify({ candidates: [{ finishReason: "PROHIBITED_CONTENT" }] })}\n\n`); }
+  if (model === "flaky") { flaky++; if (flaky === 1) { res.writeHead(200, { "content-type": "text/event-stream" }); return res.end(`data: ${JSON.stringify({ promptFeedback: { blockReason: "PROHIBITED_CONTENT" } })}\n\n`); } }
+  if (model === "blocked") { const body = { candidates: [{ finishReason: "PROHIBITED_CONTENT" }] };
+    if (!req.url.includes("alt=sse")) { res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify(body)); }
+    res.writeHead(200, { "content-type": "text/event-stream" }); return res.end(`data: ${JSON.stringify(body)}\n\n`); }
   const chunks = [{ responseId: "g-1", candidates: [{ content: { role: "model", parts: [{ text: "先想一想", thought: true }] } }] },
     { candidates: [{ content: { role: "model", parts: [{ text: "義兄" }] } }] },
     { candidates: [{ content: { role: "model", parts: [{ text: "译文" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 5, thoughtsTokenCount: 7 } }];
@@ -93,6 +96,19 @@ try {
   const blocked = await generate({ provider: gem("blocked"), messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
   assert.match(blocked.message, /PROHIBITED_CONTENT|拦截|拒绝/, blocked.message);
   assert.equal((await generate({ provider: gem("mislabelled"), messages: [{ role: "user", content: "hi" }] })).text, "義兄译文");
+  // A false positive from moderation: the same text is re-sent, the second time without streaming.
+  const before = geminiCalls.length;
+  const retried = await generate({ provider: gem("flaky", { thinkingBudget: 0 }), messages: [{ role: "user", content: "同一段原文" }] });
+  assert.equal(retried.text, "译文"); const tries = geminiCalls.slice(before);
+  assert.equal(tries.length, 2); assert.match(tries[0].url, /alt=sse/); assert.doesNotMatch(tries[1].url, /alt=sse/);
+  assert.deepEqual(tries[1].body.contents, tries[0].body.contents, "the text is re-sent unchanged");
+  assert.deepEqual(tries[0].body.generationConfig.thinkingConfig, { thinkingBudget: 0 });
+  const stubborn = await generate({ provider: gem("blocked", { geminiRetries: 1 }), messages: [{ role: "user", content: "hi" }] }).catch((e) => e);
+  assert.equal(stubborn.code, "MODEL_REFUSAL"); assert.match(stubborn.message, /已原样重发 1 次/);
+  const noRetry = geminiCalls.length; await generate({ provider: gem("blocked", { geminiRetries: 0 }), messages: [{ role: "user", content: "hi" }] }).catch(() => {});
+  assert.equal(geminiCalls.length - noRetry, 1);
+  assert.equal((await generate({ provider: gem("gemini-pro-test"), messages: [{ role: "user", content: "hi" }] })).text, "義兄译文");
+  assert.equal(geminiCalls.at(-1).body.generationConfig.thinkingConfig, undefined, "no thinking config unless set");
   const listed = await listHttpModels(gem(""));
   assert.deepEqual(listed.models.map((m) => m.id), ["gemini-pro-test", "gemini-pro-test-抗截断假流"]);
   assert.equal(listed.models[0].name, "Gemini Pro Test · gemini-pro-test"); assert.match(geminiCalls.at(-1).url, /^\/v1beta\/models/);
