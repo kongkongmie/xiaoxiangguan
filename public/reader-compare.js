@@ -83,7 +83,7 @@ export function createCompare({ figure = () => null, room, strip, view, bar, rea
             ${profiles.length ? "" : '<button data-open-settings>去设置引擎档案</button>'}</div></div>
       </div>
       ${viewing && !viewing.active && !compareOn ? `<div class="version-viewing" style="--v:${viewing.color}"><i aria-hidden="true"></i><span>正在查看 <b>${esc(viewing.label)}</b>，当前译稿没有改变</span><button data-adopt="${esc(viewing.id)}">采用这版</button><button data-back-current>回到当前</button></div>` : ""}
-      ${legend && legend.size ? `<div class="version-legend"><span>这份合成稿出自：</span>${[...legend.values()].map((m) => `<span class="legend-item" style="--v:${m.color}"><i aria-hidden="true"></i>${esc(m.name)} ${m.n} 处</span>`).join("")}</div>` : ""}
+      ${legend && legend.size ? `<div class="version-legend"><span>${shown?.relay ? "这份接力译稿出自：" : "这份合成稿出自："}</span>${[...legend.values()].map((m) => `<span class="legend-item" style="--v:${m.color}"><i aria-hidden="true"></i>${esc(m.name)} ${m.n} 处</span>`).join("")}</div>` : ""}
       ${!compareOn && versions.length && !activeVersion() && chapter?.translation ? '<div class="version-note">当前译稿是手动编辑或旧版本，没有段落对齐，暂不参与对照；合成时未挑的地方会用最新译本。</div>' : ""}`;
     strip.querySelectorAll("[data-version]").forEach((b) => b.onclick = () => { const v = byId(b.dataset.version); compareOn = false; viewingId = v.active ? null : v.id; changed(); });
     strip.querySelector(".version-compare-toggle").onclick = () => { compareOn = !compareOn; viewingId = null; hideTool(); changed(); };

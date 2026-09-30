@@ -59,6 +59,17 @@ function kindOf(revision) {
   return "读者";
 }
 
+// A run finished by more than one engine (one took over the unfinished blocks of another): which engine wrote
+// each segment, and the engines in order of first appearance. Null when a single engine wrote everything.
+export function relaySources(revision) {
+  const blocks = Array.isArray(revision?.blockEngines) ? revision.blockEngines.filter((b) => b.engine && Array.isArray(b.sourceParagraphIds)) : [];
+  const keys = [...new Set(blocks.map((b) => engineKey(b.engine)))];
+  if (keys.length < 2 || !Array.isArray(revision.segments)) return null;
+  const engines = keys.map((key) => blocks.find((b) => engineKey(b.engine) === key).engine);
+  const sources = revision.segments.map((s) => { const block = blocks.find((b) => b.sourceParagraphIds.includes(s.sourceParagraphIds[0])); return { sourceParagraphIds: s.sourceParagraphIds, engine: block?.engine || null }; });
+  return { engines, sources };
+}
+
 // Aligned whole-chapter versions, oldest first. Restoring a version copies its file path, so path identifies duplicates.
 export function comparableVersions(chapter, paragraphIds, profiles = []) {
   const history = chapter?.revisionHistory || [];
@@ -74,11 +85,12 @@ export function comparableVersions(chapter, paragraphIds, profiles = []) {
     if (!existing.revision.engine && revision.engine) existing.revision = revision;
   }
   const versions = [...byPath.values()].map(({ revision, memberIds }) => {
-    const engine = revision.origin === "mix" ? null : revision.engine || null;
+    const relay = revision.origin === "mix" ? null : relaySources(revision);
+    const engine = revision.origin === "mix" || relay ? null : revision.engine || null;
+    const name = engine ? engineName(engine, profiles) : relay ? `接力：${relay.engines.map((e) => engineName(e, profiles)).join(" + ")}` : revision.origin === "mix" ? "合成稿" : "读者版本";
     return {
-      id: revision.id, memberIds, kind: kindOf(revision), createdAt: revision.createdAt || "", active: memberIds.includes(activeId),
-      engine, name: engine ? engineName(engine, profiles) : revision.origin === "mix" ? "合成稿" : "读者版本",
-      color: engine ? engineColor(engine, profiles) : MIX_COLOR, segments: revision.segments, segmentSources: revision.segmentSources || null
+      id: revision.id, memberIds, kind: kindOf(revision), createdAt: revision.createdAt || "", active: memberIds.includes(activeId), relay: Boolean(relay),
+      engine, name, color: engine ? engineColor(engine, profiles) : MIX_COLOR, segments: revision.segments, segmentSources: revision.segmentSources || relay?.sources || null
     };
   });
   versions.sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));

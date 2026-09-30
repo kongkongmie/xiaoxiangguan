@@ -13,6 +13,8 @@ const received = [];
 const mock = http.createServer(async (req, res) => {
   let body = ""; for await (const part of req) body += part;
   const request = JSON.parse(body); received.push(request); const prompt = request.messages.find((m) => /原文段落|选中了/.test(m.content) && m.role === "user")?.content || request.messages[1].content;
+  // Takes the first block of a chapter, then fails: another engine has to finish.
+  if (request.model === "half" && /"text":"乙/.test(prompt)) { res.writeHead(503, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: { type: "overloaded_error", message: "busy" } })); }
   if (request.model === "broken") { res.writeHead(500, { "content-type": "application/json" }); return res.end(JSON.stringify({ error: { type: "server_error", message: "upstream exploded" } })); }
   const match = prompt.match(/原文段落：\n(\[[^\n]+\])/);
   // Word correspondence: one real match and one paraphrase that must be dropped.
@@ -29,7 +31,7 @@ let child;
 try {
   for (const dir of ["data", "secrets", "library/book/state"]) await mkdir(join(folder, dir), { recursive: true });
   const source = ["吾輩は猫である。", "名前はまだ無い。", "どこで生れたかとんと見当がつかぬ。"].join("\n\n");
-  await writeFile(join(folder, "data/library.json"), JSON.stringify({ books: [{ id: "book", title: "Compare fixture", chapters: [{ id: "c1", title: "一", source, status: "extracted" }], tasks: [], glossary: [], characters: [], uncertainties: [] }], exports: [] }));
+  await writeFile(join(folder, "data/library.json"), JSON.stringify({ books: [{ id: "book", title: "Compare fixture", chapters: [{ id: "c1", title: "一", source, status: "extracted" }, { id: "c2", title: "二", source: ["甲".repeat(420), "乙".repeat(420), "丙".repeat(420)].join("\n\n"), status: "extracted" }], tasks: [], glossary: [], characters: [], uncertainties: [] }], exports: [] }));
   await writeFile(join(folder, "secrets/provider.json"), providerFor("model-a"));
   const entry = new URL("../server.mjs", import.meta.url).href;
   child = spawn(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(entry)});`], { env: { ...process.env, PORT: "0", TRANSLATION_LIBRARY_DATA_DIR: folder }, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
@@ -146,6 +148,23 @@ try {
   const sentA = received.find((r) => r.model === "model-a"); assert.match(sentA.messages[0].content, /^你是严谨的/, "engine A keeps the built-in prompt");
   assert.equal(plain.engine.promptSetId, "builtin");
   await call("PUT", "/api/prompts", { sets: [], defaultId: "builtin", bindings: {} });
+
+  // Relay: one engine translates part of a chapter and fails; another takes over only the unfinished blocks.
+  const providerBefore = await readFile(join(folder, "secrets/provider.json"), "utf8");
+  await writeFile(join(folder, "secrets/provider.json"), JSON.stringify({ ...JSON.parse(providerFor("half")), translationBlockChars: 500 }));
+  await call("POST", "/api/books/book/chapters/c2/translate", { mode: "draft" }); await idle();
+  let relayChapter = await call("GET", "/api/books/book/chapters/c2");
+  assert.equal(relayChapter.translationRun.status, "failed"); assert.equal(relayChapter.translationRun.blocks.filter((b) => b.status === "completed").length, 1);
+  await writeFile(join(folder, "secrets/provider.json"), providerBefore);
+  received.length = 0;
+  await call("POST", "/api/books/book/chapters/c2/translate", { mode: "draft", retry: true, profileId: a.id }); await idle();
+  assert.ok(received.every((r) => !r.messages.some((m) => /"text":"甲/.test(m.content))), "the finished block is not sent again");
+  relayChapter = await call("GET", "/api/books/book/chapters/c2");
+  const relayIds = relayChapter.sourceParagraphs.map((p) => p.id);
+  const relayVersion = comparableVersions(relayChapter, relayIds, (await call("GET", "/api/engine-profiles")).profiles).at(-1);
+  assert.ok(relayVersion.relay, "a relay version"); assert.match(relayVersion.name, /^接力：.*\+ 模型甲$/);
+  assert.deepEqual(relayVersion.segmentSources.map((s) => s.engine.model), ["half", "model-a", "model-a"]);
+  assert.deepEqual(relayVersion.segments.map((s) => s.text), ["half 译第1段。", "model-a 译第1段。", "model-a 译第1段。"]);
 
   // Switching and housekeeping.
   assert.equal((await call("POST", `/api/engine-profiles/${a.id}/activate`)).model, "model-a");

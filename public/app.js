@@ -311,7 +311,35 @@ async function extractBook(bookId) {
   catch (error) { notify(error.message); }
 }
 
+// Which engine takes over: the active one or any saved profile. Resolves to { profileId } ("" = active) or null.
+async function chooseEngine({ title, lead, lastEngine }) {
+  let profiles = []; try { profiles = (await request("/api/engine-profiles")).profiles || []; } catch { /* the active engine still works */ }
+  const active = profiles.find((p) => p.active);
+  const current = providerSettings || await request("/api/provider").catch(() => null) || {};
+  const engines = [{ id: "", name: active?.name || engineSummary(current), color: active?.color || "", model: active?.model || current.model || "", activeProfile: active?.id }, ...profiles.filter((p) => !p.active)];
+  const last = (e) => lastEngine && (lastEngine.profileId ? lastEngine.profileId === (e.id || e.activeProfile) : !e.id && lastEngine.model === e.model);
+  const dialog = document.createElement("dialog"); dialog.className = "batch-dialog";
+  dialog.innerHTML = `<form method="dialog"><div class="dialog-head"><h2>${escapeHtml(title)}</h2><button value="cancel" aria-label="关闭">×</button></div>
+    <p class="batch-lead">${escapeHtml(lead)}</p>
+    <fieldset class="batch-engines"><legend>由哪个引擎接手</legend>${engines.map((e, i) => `<label class="batch-engine" style="--v:${/^#[0-9a-f]{6}$/i.test(e.color) ? e.color : "var(--muted)"}"><input type="radio" name="engine" value="${i}" ${i === 0 ? "checked" : ""}/><i aria-hidden="true"></i><span><strong>${escapeHtml(e.name)}</strong><small>${[i === 0 ? "当前启用" : "", e.model, last(e) ? "上次用的就是它" : ""].filter(Boolean).map(escapeHtml).join(" · ")}</small></span></label>`).join("")}</fieldset>
+    <div class="batch-actions"><button value="cancel">取消</button><button class="primary" value="go">继续翻译</button></div></form>`;
+  document.body.append(dialog);
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => { const go = dialog.returnValue === "go"; const picked = engines[Number(dialog.querySelector("form").engine.value) || 0]; dialog.remove(); resolve(go ? { profileId: picked.id, name: picked.name } : null); });
+    dialog.showModal();
+  });
+}
+
 async function startTranslation(book, chapter, mode, range = { type: "whole" }, retry = false, profileId) {
+  // Continuing a run: finished blocks stay; ask which engine translates the rest.
+  if (retry && profileId === undefined) {
+    const run = data.books.find((b) => b.id === book.id)?.chapters.find((c) => c.id === chapter.id)?.translationRun || chapter.translationRun;
+    const done = (run?.blocks || []).filter((b) => b.status === "completed").length;
+    const choice = await chooseEngine({ title: "从未完成块继续", lastEngine: run?.engine,
+      lead: done ? `已经译好的 ${done} 块会原样保留，只翻译剩下的部分。可以换一个引擎来接手，保存下来的译本会标明每段是谁译的。` : "这一章还没有译好的块，会从头开始翻译。" });
+    if (!choice) return;
+    profileId = choice.profileId || undefined;
+  }
   try {
     // A saved profile carries its own credentials; only the active engine needs checking here.
     const settings = profileId ? null : await request("/api/provider");

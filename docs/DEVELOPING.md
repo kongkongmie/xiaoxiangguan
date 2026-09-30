@@ -28,7 +28,7 @@
 
 - `scripts/test-research.mjs` 在无法解析 `localhost.` 的沙盒里会失败（上游原样也失败），与代码无关。
 - 测试都用 `127.0.0.1` 上的临时 mock 服务和临时数据目录，不联网、不碰真实书库。
-- 界面场景：`reader`（对照/合成/单段现译/主题/手机）、`settings`（自动读模型/测试即保存/一键切换/任务详情）、`align`（两栏对齐/选词对应/紧凑对照）、`gemini-ui`（Gemini 反代预设，**占用 8890 端口**）、`batch`（翻译全书对话框）、`prompts`（提示词编辑器）、`live`（任务实时输出）、`images <epub>`（插图，需要自备带插图的 EPUB）。`PLAYWRIGHT_CHROMIUM` 可指定浏览器路径。
+- 界面场景：`reader`（对照/合成/单段现译/主题/手机）、`settings`（自动读模型/测试即保存/一键切换/任务详情）、`align`（两栏对齐/选词对应/紧凑对照）、`gemini-ui`（Gemini 反代预设，**占用 8890 端口**）、`batch`（翻译全书对话框）、`prompts`（提示词编辑器）、`live`（任务实时输出）、`relay`（续译时选择接手引擎）、`images <epub>`（插图，需要自备带插图的 EPUB）。`PLAYWRIGHT_CHROMIUM` 可指定浏览器路径。
 - 改了 `public/` 下的文件：刷新页面即可（静态文件带 `cache-control: no-cache`）。改了 `server.mjs` 或 `lib/`：必须重启后台（设置页“关闭后台”，再用启动脚本启动）。
 
 ## 3. 目录地图
@@ -122,6 +122,7 @@
 | 任务列表、失败详情 | app.js：`renderTasks`、`taskDetails`、`taskEngineLine`；服务端 `taskErrorDetail` |
 | 任务实时输出 | 服务端 `recordLive` / `finishLive` / `GET /api/tasks/:id/live`；前端 `refreshLive` / `taskLive` / `readableOutput`；样式 `styles.css` “Live output” 段 |
 | 全书/批量翻译对话框、用量粗估 | app.js：`translateSelected`、`batchEstimate` |
+| 续译与换引擎接手 | 前端 `startTranslation`（`retry` 时弹 `chooseEngine`）；服务端 `translateBookChapter` 里 `retry && compatible` 保留已完成块；接力译本的识别与逐段来源 `relaySources`（compare-core.js），依据 revision 的 `blockEngines` |
 | 阅读器两栏布局、同步滚动 | `public/reader.js`（`mountReader` 顶部的模板字符串是整个阅读器的 HTML） |
 | 多译本对照、合成 | `public/reader-compare.js`；纯逻辑在 `compare-core.js`；服务端 `compose` / `compose-draft` 路由 |
 | 选词对应 | 前端 `reader-align.js`；服务端 `alignSelection` 与 `/align` 路由 |
